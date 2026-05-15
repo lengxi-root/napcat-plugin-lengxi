@@ -1,30 +1,25 @@
-// 操作追踪器 - 通过监听 OneBot 通知事件确认操作结果
-// 禁言、踢人等操作不返回结果，需要通过通知事件判断
 
 export type OperationType = 'ban' | 'lift_ban' | 'kick' | 'set_admin' | 'unset_admin' | 'recall';
 
-// 待确认的操作
 export interface PendingOperation {
   id: string;
   type: OperationType;
   group_id: string;
   user_id: string;
   operator_id?: string;
-  duration?: number;  // 禁言时长
+  duration?: number;
   created_at: number;
-  timeout: number;  // 超时时间（毫秒）
+  timeout: number;
   resolve: (result: OperationResult) => void;
 }
 
-// 操作结果
 export interface OperationResult {
   success: boolean;
-  confirmed: boolean;  // 是否通过通知事件确认
+  confirmed: boolean;
   message: string;
   data?: unknown;
 }
 
-// 通知事件类型
 export interface NoticeEvent {
   post_type: 'notice';
   notice_type: string;
@@ -36,15 +31,12 @@ export interface NoticeEvent {
   message_id?: number;
 }
 
-// 待确认的操作队列
 const pendingOperations: Map<string, PendingOperation> = new Map();
 
-// 生成操作ID
 function generateOperationId (type: OperationType, groupId: string, userId: string): string {
   return `${type}_${groupId}_${userId}_${Date.now()}`;
 }
 
-// 添加待确认操作
 export function addPendingOperation (
   type: OperationType,
   groupId: string,
@@ -69,7 +61,6 @@ export function addPendingOperation (
 
     pendingOperations.set(id, operation);
 
-    // 超时处理：假定成功（因为大多数情况下无返回=成功）
     setTimeout(() => {
       const op = pendingOperations.get(id);
       if (op) {
@@ -84,7 +75,6 @@ export function addPendingOperation (
   });
 }
 
-// 处理通知事件
 export function handleNoticeEvent (event: NoticeEvent): boolean {
   const { notice_type, sub_type, group_id, user_id, operator_id, duration } = event;
 
@@ -93,14 +83,12 @@ export function handleNoticeEvent (event: NoticeEvent): boolean {
   const groupIdStr = String(group_id);
   const userIdStr = String(user_id);
 
-  // 遍历待确认操作，匹配通知
   for (const [id, op] of pendingOperations.entries()) {
     if (op.group_id !== groupIdStr || op.user_id !== userIdStr) continue;
 
     let matched = false;
     let isSuccess = true;
 
-    // 禁言通知
     if (notice_type === 'group_ban') {
       if (op.type === 'ban' && sub_type === 'ban') {
         matched = true;
@@ -109,14 +97,12 @@ export function handleNoticeEvent (event: NoticeEvent): boolean {
       }
     }
 
-    // 群成员减少（踢人）
     if (notice_type === 'group_decrease' && op.type === 'kick') {
       if (sub_type === 'kick' || sub_type === 'kick_me') {
         matched = true;
       }
     }
 
-    // 管理员变更
     if (notice_type === 'group_admin') {
       if (op.type === 'set_admin' && sub_type === 'set') {
         matched = true;
@@ -125,7 +111,6 @@ export function handleNoticeEvent (event: NoticeEvent): boolean {
       }
     }
 
-    // 消息撤回
     if (notice_type === 'group_recall' && op.type === 'recall') {
       matched = true;
     }
@@ -145,7 +130,6 @@ export function handleNoticeEvent (event: NoticeEvent): boolean {
   return false;
 }
 
-// 获取成功消息
 function getSuccessMessage (type: OperationType, userId: string, duration?: number): string {
   switch (type) {
     case 'ban':
@@ -167,7 +151,6 @@ function getSuccessMessage (type: OperationType, userId: string, duration?: numb
   }
 }
 
-// 清理过期操作
 export function cleanupExpiredOperations (): void {
   const now = Date.now();
   for (const [id, op] of pendingOperations.entries()) {
@@ -177,7 +160,6 @@ export function cleanupExpiredOperations (): void {
   }
 }
 
-// 获取待确认操作数量
 export function getPendingCount (): number {
   return pendingOperations.size;
 }

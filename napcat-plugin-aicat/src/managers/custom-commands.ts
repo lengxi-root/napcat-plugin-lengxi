@@ -19,10 +19,8 @@ class CustomCommandManager {
   private initialized: boolean = false;
 
   constructor () {
-    // 延迟初始化，不在这里加载命令
   }
 
-  // 初始化方法
   init (): void {
     if (this.initialized) return;
     this.loadCommands();
@@ -154,18 +152,14 @@ class CustomCommandManager {
       return response;
     } else if (cmd.response_type === 'api') {
       const apiResult = await this.callApi(cmd, match, userId);
-      // 如果callApi返回的是字段映射对象，则进行模板替换
       if (typeof apiResult === 'object' && apiResult !== null && !(apiResult as string).startsWith?.('API 调用失败')) {
         let response = cmd.response_content || "";
-        // 智能模板替换 - 处理复杂表达式
         response = this.processComplexTemplate(response, apiResult as Record<string, unknown>);
-        // 替换特殊变量
         response = response.replace(/\{user_id\}/g, userId);
         response = response.replace(/\{group_id\}/g, groupId);
         response = response.replace(/\{nickname\}/g, nickname);
         return response;
       }
-      // 否则返回原始结果（可能是错误消息）
       return apiResult as string;
     }
 
@@ -203,7 +197,6 @@ class CustomCommandManager {
   }
 
   private formatApiResponse (data: unknown, extractPath: string): unknown {
-    // 如果 extractPath 为空，返回整个数据对象
     if (!extractPath) {
       return data;
     }
@@ -211,7 +204,6 @@ class CustomCommandManager {
     let result: unknown = data;
     let fields: string[] = [];
 
-    // 解析括号格式 [field1,field2]
     const bracketMatch = extractPath.match(/\[([^\]]+)\]/g);
     if (bracketMatch) {
       const lastBracket = bracketMatch[bracketMatch.length - 1];
@@ -221,7 +213,6 @@ class CustomCommandManager {
       }
     }
 
-    // 解析冒号格式 path:field1,field2
     const colonIdx = extractPath.indexOf(':');
     if (colonIdx > 0) {
       const pathPart = extractPath.substring(0, colonIdx).replace(/\[\]/g, '');
@@ -234,21 +225,15 @@ class CustomCommandManager {
       }
     }
 
-    // 解析点号路径（如 players.online,players.max）
-    // 如果没有冒号，尝试解析点号路径
     if (colonIdx < 0) {
-      // 分割 extractPath 为多个字段路径
       const fieldPaths = extractPath.split(',').map((f) => f.trim());
       if (fieldPaths.length > 0) {
-        // 检查是否是点号路径
         const hasDot = fieldPaths.some((fp) => fp.includes('.'));
         if (hasDot) {
-          // 点号路径：每个字段路径独立提取
           const extracted: Record<string, unknown> = {};
           for (const fieldPath of fieldPaths) {
             if (!fieldPath) continue;
 
-            // 解析点号路径
             const parts = fieldPath.split('.');
             let current = data;
             let valid = true;
@@ -268,26 +253,21 @@ class CustomCommandManager {
             }
 
             if (valid) {
-              // 使用完整路径作为字段名（如 "players.online" -> "players.online"）
               extracted[fieldPath] = current;
             } else {
-              // 如果路径无效，设置为空字符串
               extracted[fieldPath] = '';
             }
           }
 
-          // 如果成功提取了字段，返回提取的对象
           if (Object.keys(extracted).length > 0) {
             return extracted;
           }
         } else {
-          // 简单字段名
           fields = fieldPaths;
         }
       }
     }
 
-    // 如果没有找到特定的路径，尝试常见的键名
     if (result === data && typeof data === 'object' && data !== null) {
       const record = data as Record<string, unknown>;
       for (const key of ['data', 'result', 'results', 'items', 'list', 'records']) {
@@ -298,7 +278,6 @@ class CustomCommandManager {
       }
     }
 
-    // 如果有字段列表，提取这些字段
     if (fields.length > 0 && typeof result === 'object' && result !== null) {
       const extracted: Record<string, unknown> = {};
       for (const field of fields) {
@@ -312,7 +291,6 @@ class CustomCommandManager {
       return extracted;
     }
 
-    // 否则返回整个结果对象
     return result;
   }
 
@@ -357,11 +335,9 @@ class CustomCommandManager {
     return entries.join(' | ');
   }
 
-  // 处理复杂模板表达式，如 ${online ? '在线' : '离线'}
   private processComplexTemplate (template: string, data: Record<string, unknown>): string {
     let result = template;
     
-    // 查找所有 ${...} 表达式
     const expressionRegex = /\$\{([^}]+)\}/g;
     const matches = [...template.matchAll(expressionRegex)];
     
@@ -372,11 +348,9 @@ class CustomCommandManager {
       let evaluatedValue: unknown;
       
       try {
-        // 处理三目运算符表达式
         if (expression.includes('?')) {
           evaluatedValue = this.evaluateTernaryExpression(expression, data);
         } else {
-          // 简单变量引用
           evaluatedValue = this.getNestedValue(data, expression);
         }
       } catch (error) {
@@ -390,37 +364,30 @@ class CustomCommandManager {
     return result;
   }
 
-  // 评估三目运算符表达式
   private evaluateTernaryExpression (expression: string, data: Record<string, unknown>): string {
-    // 解析类似 "online ? '在线' : '离线'" 的表达式
     const match = expression.match(/^\s*([^?]+?)\s*\?\s*['"]([^'"]+)['"]\s*:\s*['"]([^'"]+)['"]\s*$/);
     
     if (match) {
       const [, condition, trueValue, falseValue] = match;
       const conditionValue = this.getNestedValue(data, condition.trim());
       
-      // 如果条件值是布尔值，直接使用
       if (typeof conditionValue === 'boolean') {
         return conditionValue ? trueValue : falseValue;
       }
       
-      // 如果条件值存在且非空，视为真
       const isTruthy = conditionValue !== null && conditionValue !== undefined && 
                       (typeof conditionValue !== 'string' || conditionValue.trim() !== '');
       return isTruthy ? trueValue : falseValue;
     }
     
-    // 处理数字比较表达式
     const numberMatch = expression.match(/^\s*([^?]+?)\s*\?\s*([^:]+?)\s*:\s*(.+?)\s*$/);
     if (numberMatch) {
       const [, conditionPath, truePart, falsePart] = numberMatch;
       const conditionValue = this.getNestedValue(data, conditionPath.trim());
       
-      // 尝试解析truePart和falsePart中的嵌套值
       let trueValue: unknown = truePart;
       let falseValue: unknown = falsePart;
       
-      // 检查是否包含变量引用
       if (truePart.includes('.') && !truePart.includes("'") && !truePart.includes('"')) {
         trueValue = this.getNestedValue(data, truePart.trim()) || truePart;
       }
@@ -429,7 +396,6 @@ class CustomCommandManager {
         falseValue = this.getNestedValue(data, falsePart.trim()) || falsePart;
       }
       
-      // 检查条件值是否存在
       const isTruthy = conditionValue !== null && conditionValue !== undefined && 
                       (typeof conditionValue !== 'string' || conditionValue.trim() !== '');
       return isTruthy ? String(trueValue) : String(falseValue);
@@ -438,7 +404,6 @@ class CustomCommandManager {
     return '';
   }
 
-  // 获取嵌套对象的值，支持点号路径
   private getNestedValue (obj: unknown, path: string): unknown {
     if (!obj || !path) return '';
     

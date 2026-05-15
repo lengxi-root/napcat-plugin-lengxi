@@ -1,4 +1,3 @@
-// API 工具模块
 import type { Tool, ToolResult } from '../types';
 import { pluginState } from '../core/state';
 import { addPendingOperation, type OperationType } from '../managers/operation-tracker';
@@ -24,13 +23,11 @@ export const API_TOOLS: Tool[] = [{
   },
 }];
 
-// 无返回值的操作类型（需要通过通知事件确认）
 const NO_RETURN_ACTIONS = new Set([
   'set_group_ban', 'set_group_whole_ban', 'set_group_kick',
   'set_group_admin', 'set_group_card', 'delete_msg',
 ]);
 
-// 获取操作类型
 function getOperationType (action: string, params: Record<string, unknown>): OperationType | null {
   if (action === 'set_group_ban') {
     const duration = params.duration as number || 0;
@@ -55,7 +52,6 @@ export async function executeApiTool (
 
   if (!action) return { success: false, error: '缺少 action 参数' };
 
-  // 合并转发消息内容过滤
   if (action.includes('forward_msg') && params.messages) {
     params.messages = sanitizeForwardMessages(params.messages as unknown[]);
   }
@@ -66,21 +62,17 @@ export async function executeApiTool (
   pluginState.debug(`[API] 执行 ${action}，参数: ${JSON.stringify(params)}`);
 
   try {
-    // 调用 API
     const result = await actions.call(action as never, params as never, adapter, config) as Record<string, unknown>;
     pluginState.debug(`[API] ${action} 返回: ${JSON.stringify(result)}`);
 
-    // 检查返回结果中是否包含错误
     if (result && result.retcode !== undefined && result.retcode !== 0) {
       return parseApiError(action, result);
     }
 
-    // 对于有返回值的操作，直接返回成功
     if (!isNoReturnAction || result) {
       return { success: true, message: getSuccessMessage(action, params), data: result ?? {} };
     }
 
-    // 无返回值操作：注册待确认，等待通知事件
     if (operationType && params.group_id && params.user_id) {
       pluginState.debug(`[API] ${action} 无返回值，等待通知确认...`);
       const confirmation = await addPendingOperation(
@@ -99,7 +91,6 @@ export async function executeApiTool (
     const errorStr = String(error);
     pluginState.debug(`[API] ${action} 异常: ${errorStr}`);
 
-    // "No data returned" 对于无返回操作通常意味着成功，等待通知确认
     if (errorStr.includes('No data returned') && isNoReturnAction) {
       if (operationType && params.group_id && params.user_id) {
         pluginState.debug(`[API] ${action} "No data returned"，等待通知确认...`);
@@ -111,7 +102,6 @@ export async function executeApiTool (
         );
         return { success: confirmation.success, message: confirmation.message, data: confirmation.data };
       }
-      // 全员禁言等无 user_id 的操作
       return { success: true, message: getSuccessMessage(action, params), data: {} };
     }
 
@@ -119,7 +109,6 @@ export async function executeApiTool (
   }
 }
 
-// 统一错误匹配规则
 const ERROR_RULES: [RegExp, string][] = [
   [/no permission|lack|NOT_GROUP_ADMIN/i, '机器人没有管理员权限，无法执行此操作'],
   [/owner|群主|cannot ban owner/i, '无法对群主执行此操作'],
@@ -129,7 +118,6 @@ const ERROR_RULES: [RegExp, string][] = [
   [/频繁|rate|风控/i, '操作过于频繁或触发风控，请稍后再试'],
 ];
 
-// 统一错误解析（合并 API 返回错误和异常）
 function parseApiError (action: string, msgOrResult: string | Record<string, unknown>): ToolResult {
   let text: string;
   let data: Record<string, unknown> | undefined;
@@ -151,7 +139,6 @@ function parseApiError (action: string, msgOrResult: string | Record<string, unk
   return { success: false, error: `${action} 失败: ${text.slice(0, 100)}`, data };
 }
 
-// 获取成功消息
 function getSuccessMessage (action: string, params: Record<string, unknown>): string {
   if (action === 'set_group_ban') {
     const duration = params.duration as number || 0;
@@ -178,7 +165,6 @@ function getSuccessMessage (action: string, params: Record<string, unknown>): st
 
 export const getApiTools = (): Tool[] => API_TOOLS;
 
-// 处理合并转发消息，规范化格式并过滤无效内容
 function sanitizeForwardMessages (messages: unknown[]): unknown[] {
   if (!Array.isArray(messages)) return messages;
 
@@ -188,35 +174,27 @@ function sanitizeForwardMessages (messages: unknown[]): unknown[] {
 
     const data = n.data as Record<string, unknown>;
 
-    // 确保 user_id 是数字类型
     if (data.user_id !== undefined) {
       data.user_id = Number(data.user_id) || 66600000;
     }
 
-    // 确保 nickname 存在
     if (!data.nickname) {
       data.nickname = 'Bot';
     }
 
-    // 处理 content 字段
     if (typeof data.content === 'string') {
-      // 字符串内容转为标准消息段格式
       data.content = [{ type: 'text', data: { text: sanitizeText(data.content) } }];
     } else if (Array.isArray(data.content)) {
-      // 检查 content 是否包含嵌套的 node（嵌套合并转发）
       const hasNestedNodes = (data.content as unknown[]).some(
         seg => (seg as Record<string, unknown>).type === 'node'
       );
 
       if (hasNestedNodes) {
-        // 递归处理嵌套的 node 数组
         data.content = sanitizeForwardMessages(data.content as unknown[]);
       } else {
-        // 处理普通消息段
         data.content = (data.content as unknown[]).map(seg => {
           const s = seg as Record<string, unknown>;
 
-          // 处理 text 消息段
           if (s.type === 'text' && s.data) {
             const d = s.data as Record<string, unknown>;
             if (typeof d.text === 'string') {
@@ -224,7 +202,6 @@ function sanitizeForwardMessages (messages: unknown[]): unknown[] {
             }
           }
 
-          // 过滤无效的 image 节点（缺少 file 或 url）
           if (s.type === 'image' && s.data) {
             const d = s.data as Record<string, unknown>;
             if (!d.file && !d.url) {
@@ -241,9 +218,7 @@ function sanitizeForwardMessages (messages: unknown[]): unknown[] {
   });
 }
 
-// 过滤可能被误解析为 CQ 码的文本
 function sanitizeText (text: string): string {
-  // 将可能引起问题的 [xxx] 格式转为全角括号
   return text.replace(/\[(?!CQ:)(动画表情|表情|图片|文件|语音|视频)[^\]]*\]/g, match => {
     return '【' + match.slice(1, -1) + '】';
   });
