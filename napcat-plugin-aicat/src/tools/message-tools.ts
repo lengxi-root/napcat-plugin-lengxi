@@ -1,8 +1,6 @@
-// 消息查询工具模块 - 允许 AI 查询已记录的历史消息
 import type { Tool, ToolResult } from '../types';
 import { queryMessages, searchMessages, getMessageStats, getMessageById } from '../managers/message-logger';
 
-// 消息查询工具定义
 export const MESSAGE_TOOLS: Tool[] = [
   {
     type: 'function',
@@ -70,7 +68,6 @@ export const MESSAGE_TOOLS: Tool[] = [
   },
 ];
 
-// 执行消息查询工具
 export function executeMessageTool (name: string, args: Record<string, unknown>): ToolResult {
   try {
     switch (name) {
@@ -82,10 +79,8 @@ export function executeMessageTool (name: string, args: Record<string, unknown>)
         const offset = (args.offset as number) || 0;
         const hoursAgo = args.hours_ago as number | undefined;
 
-        // 限制最大查询数量
         if (limit > 100) limit = 100;
 
-        // 计算时间范围
         let startTime: number | undefined;
         if (hoursAgo && hoursAgo > 0) {
           startTime = Math.floor(Date.now() / 1000) - hoursAgo * 3600;
@@ -104,7 +99,6 @@ export function executeMessageTool (name: string, args: Record<string, unknown>)
           return { success: true, message: '没有找到符合条件的消息记录', data: [], count: 0 };
         }
 
-        // 格式化消息便于 AI 理解
         const formatted = messages.map(m => ({
           id: m.id,
           message_id: m.message_id,
@@ -202,5 +196,4 @@ export function executeMessageTool (name: string, args: Record<string, unknown>)
   }
 }
 
-// 获取消息工具列表
 export const getMessageTools = (): Tool[] => MESSAGE_TOOLS;

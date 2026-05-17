@@ -1,4 +1,3 @@
-// 用户检测器管理器 - 监控特定用户消息并执行操作
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import type { UserWatcher, Tool, ToolResult } from '../types';
@@ -6,7 +5,6 @@ import type { UserWatcher, Tool, ToolResult } from '../types';
 let DATA_DIR = '';
 let WATCHERS_FILE = '';
 
-// 初始化数据目录
 export function initWatchersDataDir (dataPath: string): void {
   DATA_DIR = dataPath;
   WATCHERS_FILE = join(DATA_DIR, 'user_watchers.json');
@@ -16,7 +14,6 @@ export function initWatchersDataDir (dataPath: string): void {
   }
 }
 
-// API 调用器类型
 type ApiCaller = (action: string, params: Record<string, unknown>) => Promise<ToolResult>;
 
 class UserWatcherManager {
@@ -25,22 +22,18 @@ class UserWatcherManager {
   private initialized: boolean = false;
 
   constructor () {
-    // 延迟初始化，不在这里加载检测器
   }
 
-  // 初始化方法
   init (): void {
     if (this.initialized) return;
     this.loadWatchers();
     this.initialized = true;
   }
 
-  // 设置 API 调用器
   setApiCaller (caller: ApiCaller): void {
     this.apiCaller = caller;
   }
 
-  // 加载检测器
   loadWatchers (): void {
     if (!WATCHERS_FILE || !existsSync(WATCHERS_FILE)) return;
 
@@ -61,7 +54,6 @@ class UserWatcherManager {
     }
   }
 
-  // 添加检测器
   addWatcher (
     watcherId: string,
     targetUserId: string,
@@ -72,7 +64,6 @@ class UserWatcherManager {
     description: string = '',
     cooldownSeconds: number = 0
   ): ToolResult {
-    // 验证正则表达式
     if (keywordFilter) {
       try {
         new RegExp(keywordFilter);
@@ -102,7 +93,6 @@ class UserWatcherManager {
     };
   }
 
-  // 删除检测器
   removeWatcher (watcherId: string): ToolResult {
     if (this.watchers.has(watcherId)) {
       this.watchers.delete(watcherId);
@@ -112,7 +102,6 @@ class UserWatcherManager {
     return { success: false, error: `检测器 '${watcherId}' 不存在` };
   }
 
-  // 切换检测器状态
   toggleWatcher (watcherId: string, enabled: boolean): ToolResult {
     const watcher = this.watchers.get(watcherId);
     if (!watcher) {
@@ -123,7 +112,6 @@ class UserWatcherManager {
     return { success: true, message: `检测器 '${watcherId}' 已${enabled ? '启用' : '禁用'}` };
   }
 
-  // 列出所有检测器
   listWatchers (): ToolResult {
     const watcherList = Array.from(this.watchers.entries()).map(([id, w]) => ({
       id,
@@ -138,7 +126,6 @@ class UserWatcherManager {
     return { success: true, data: watcherList, count: watcherList.length };
   }
 
-  // 检查并执行检测器
   async checkAndExecute (
     userId: string,
     groupId: string,
@@ -151,14 +138,11 @@ class UserWatcherManager {
     for (const [watcherId, watcher] of this.watchers) {
       if (!watcher.enabled) continue;
 
-      // 检查目标用户（空、*、all 表示监控全部用户）
       const isAllUsers = !watcher.target_user_id || watcher.target_user_id === '*' || watcher.target_user_id === 'all';
       if (!isAllUsers && watcher.target_user_id !== userIdStr) continue;
 
-      // 检查群限制
       if (watcher.group_id && watcher.group_id !== groupIdStr) continue;
 
-      // 检查关键词过滤
       if (watcher.keyword_filter) {
         try {
           if (!new RegExp(watcher.keyword_filter).test(content)) continue;
@@ -167,21 +151,17 @@ class UserWatcherManager {
         }
       }
 
-      // 检查冷却时间
       if (watcher.cooldown_seconds > 0 && watcher.last_triggered) {
         try {
           const lastTime = new Date(watcher.last_triggered).getTime();
           const elapsed = (Date.now() - lastTime) / 1000;
           if (elapsed < watcher.cooldown_seconds) continue;
         } catch {
-          // 继续执行
         }
       }
 
-      // 触发检测器
       const result = await this.executeAction(watcher, userIdStr, groupIdStr, content, messageId);
 
-      // 更新触发记录
       watcher.last_triggered = new Date().toISOString();
       watcher.trigger_count = (watcher.trigger_count || 0) + 1;
       this.saveWatchers();
@@ -192,7 +172,6 @@ class UserWatcherManager {
     return null;
   }
 
-  // 执行操作
   private async executeAction (
     watcher: UserWatcher,
     userId: string,
@@ -204,7 +183,6 @@ class UserWatcherManager {
       return { success: false, error: 'API调用器未设置' };
     }
 
-    // 替换变量
     let actionContent = watcher.action_content
       .replace(/\{user_id\}/g, userId)
       .replace(/\{group_id\}/g, groupId)
@@ -270,7 +248,6 @@ class UserWatcherManager {
   }
 }
 
-// 工具定义
 export const USER_WATCHER_TOOLS: Tool[] = [
   {
     type: 'function',
@@ -348,10 +325,8 @@ export const USER_WATCHER_TOOLS: Tool[] = [
   },
 ];
 
-// 导出单例
 export const userWatcherManager = new UserWatcherManager();
 
-// 执行用户检测器工具
 export function executeUserWatcherTool (
   toolName: string,
   args: Record<string, unknown>

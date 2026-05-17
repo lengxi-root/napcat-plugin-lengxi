@@ -1,4 +1,3 @@
-// 定时任务管理器
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import type { ScheduledTask, Tool, ToolResult } from '../types';
@@ -6,7 +5,6 @@ import type { ScheduledTask, Tool, ToolResult } from '../types';
 let DATA_DIR = '';
 let TASKS_FILE = '';
 
-// 初始化数据目录
 export function initTasksDataDir (dataPath: string): void {
   DATA_DIR = dataPath;
   TASKS_FILE = join(DATA_DIR, 'scheduled_tasks.json');
@@ -16,7 +14,6 @@ export function initTasksDataDir (dataPath: string): void {
   }
 }
 
-// 消息发送函数类型
 type MessageSender = (targetType: string, targetId: string, content: string) => Promise<void>;
 
 class ScheduledTaskManager {
@@ -26,22 +23,18 @@ class ScheduledTaskManager {
   private initialized: boolean = false;
 
   constructor () {
-    // 延迟初始化，不在这里加载任务
   }
 
-  // 初始化方法
   init (): void {
     if (this.initialized) return;
     this.loadTasks();
     this.initialized = true;
   }
 
-  // 设置消息发送器
   setMessageSender (sender: MessageSender): void {
     this.messageSender = sender;
   }
 
-  // 加载任务
   loadTasks (): void {
     if (!TASKS_FILE || !existsSync(TASKS_FILE)) return;
 
@@ -62,11 +55,9 @@ class ScheduledTaskManager {
     }
   }
 
-  // 启动调度器
   startScheduler (): void {
     if (this.intervalId) return;
 
-    // 每15秒检查一次，提高定时任务精度
     this.intervalId = setInterval(() => {
       this.checkAndExecuteTasks();
     }, 15000);
@@ -74,7 +65,6 @@ class ScheduledTaskManager {
     console.log('[ScheduledTasks] 调度器已启动 (每15秒检查)');
   }
 
-  // 停止调度器
   stopScheduler (): void {
     if (this.intervalId) {
       clearInterval(this.intervalId);
@@ -83,7 +73,6 @@ class ScheduledTaskManager {
     }
   }
 
-  // 检查并执行任务
   private async checkAndExecuteTasks (): Promise<void> {
     const now = new Date();
     const currentTime = now.toTimeString().slice(0, 5); // HH:MM
@@ -93,19 +82,16 @@ class ScheduledTaskManager {
 
       let shouldExecute = false;
 
-      // 每日定时任务
       if (task.daily_time && currentTime === task.daily_time) {
         const lastRun = task.last_run ? new Date(task.last_run) : null;
         if (!lastRun || lastRun.toDateString() !== now.toDateString()) {
           shouldExecute = true;
         }
       }
-      // 间隔任务
       else if (task.interval_seconds > 0) {
         const lastRun = task.last_run ? new Date(task.last_run) : null;
         if (lastRun) {
           const elapsed = (now.getTime() - lastRun.getTime()) / 1000;
-          // 添加5秒容差，避免因检查周期漂移导致延迟
           const tolerance = 5;
           if (elapsed >= task.interval_seconds - tolerance) {
             shouldExecute = true;
@@ -121,7 +107,6 @@ class ScheduledTaskManager {
     }
   }
 
-  // 执行任务
   private async executeTask (taskId: string): Promise<void> {
     const task = this.tasks.get(taskId);
     if (!task) return;
@@ -133,7 +118,6 @@ class ScheduledTaskManager {
         await fetch(task.content, { method: 'GET' });
       }
 
-      // 更新执行记录
       task.last_run = new Date().toISOString();
       task.run_count = (task.run_count || 0) + 1;
 
@@ -148,7 +132,6 @@ class ScheduledTaskManager {
     }
   }
 
-  // 添加任务
   addTask (
     taskId: string,
     taskType: 'send_message' | 'api_call',
@@ -204,7 +187,6 @@ class ScheduledTaskManager {
     return { success: true, message: msg };
   }
 
-  // 删除任务
   removeTask (taskId: string): ToolResult {
     if (this.tasks.has(taskId)) {
       this.tasks.delete(taskId);
@@ -214,7 +196,6 @@ class ScheduledTaskManager {
     return { success: false, error: `任务 '${taskId}' 不存在` };
   }
 
-  // 切换任务状态
   toggleTask (taskId: string, enabled: boolean): ToolResult {
     const task = this.tasks.get(taskId);
     if (!task) {
@@ -225,7 +206,6 @@ class ScheduledTaskManager {
     return { success: true, message: `任务 '${taskId}' 已${enabled ? '启用' : '禁用'}` };
   }
 
-  // 立即执行任务
   async runTaskNow (taskId: string): Promise<ToolResult> {
     if (!this.tasks.has(taskId)) {
       return { success: false, error: `任务 '${taskId}' 不存在` };
@@ -234,7 +214,6 @@ class ScheduledTaskManager {
     return { success: true, message: `任务 '${taskId}' 已执行` };
   }
 
-  // 列出所有任务
   listTasks (): ToolResult {
     const taskList = Array.from(this.tasks.entries()).map(([id, task]) => {
       const schedule = task.daily_time
@@ -253,9 +232,7 @@ class ScheduledTaskManager {
     return { success: true, data: taskList, count: taskList.length };
   }
 
-  // 解析消息内容（支持 CQ 码和 JSON）
   parseMessageContent (content: string): unknown[] {
-    // 检测是否为 JSON 格式
     if (content.trim().startsWith('[') && content.trim().endsWith(']')) {
       try {
         const parsed = JSON.parse(content);
@@ -263,11 +240,9 @@ class ScheduledTaskManager {
           return parsed;
         }
       } catch {
-        // 继续使用 CQ 码解析
       }
     }
 
-    // CQ 码解析
     const segments: unknown[] = [];
     let lastEnd = 0;
     const pattern = /\[CQ:(\w+)(?:,([^\]]*))?\]/g;
@@ -309,7 +284,6 @@ class ScheduledTaskManager {
   }
 }
 
-// 工具定义
 export const SCHEDULED_TASK_TOOLS: Tool[] = [
   {
     type: 'function',
@@ -397,10 +371,8 @@ export const SCHEDULED_TASK_TOOLS: Tool[] = [
   },
 ];
 
-// 导出单例
 export const taskManager = new ScheduledTaskManager();
 
-// 执行定时任务工具
 export async function executeScheduledTaskTool (
   toolName: string,
   args: Record<string, unknown>

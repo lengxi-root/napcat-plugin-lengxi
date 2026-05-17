@@ -1,4 +1,3 @@
-// Packet 命令处理器
 import type { NapCatPluginContext } from 'napcat-types/napcat-onebot/network/plugin-manger';
 import type { OB11Message } from 'napcat-types/napcat-onebot/types/index';
 
@@ -14,7 +13,6 @@ import {
 } from '../tools/packet-tools';
 import { sendReply } from '../utils/message';
 
-// 处理公开的 Packet 指令（取、取上一条）
 export async function handlePublicPacketCommands (
   rawMessage: string,
   event: OB11Message,
@@ -27,20 +25,17 @@ export async function handlePublicPacketCommands (
 
   const groupId = event.group_id ? String(event.group_id) : undefined;
 
-  // 取 <seq> - 按序号获取消息
   const getBySeqMatch = content.match(/^取\s*(\d+)$/);
   if (getBySeqMatch && groupId) {
     await handleGetBySeq(getBySeqMatch[1], groupId, event, ctx);
     return true;
   }
 
-  // 取 - 获取回复的消息
   if (content === '取' && groupId) {
     await handleGetReply(event, groupId, ctx);
     return true;
   }
 
-  // 取上一条 - 获取上一条消息
   if (content === '取上一条' && groupId) {
     await handleGetPrevious(event, groupId, ctx);
     return true;
@@ -49,13 +44,11 @@ export async function handlePublicPacketCommands (
   return false;
 }
 
-// 处理 Packet 相关命令（仅主人可用）
 export async function handlePacketCommands (
   rawMessage: string,
   event: OB11Message,
   ctx: NapCatPluginContext
 ): Promise<boolean> {
-  // 去除 CQ 码前缀
   const content = rawMessage
     .replace(/\[CQ:reply,id=-?\d+\]/g, '')
     .replace(/\[CQ:at,qq=\d+\]/g, '')
@@ -63,54 +56,46 @@ export async function handlePacketCommands (
 
   const groupId = event.group_id ? String(event.group_id) : undefined;
 
-  // api{...} - 调用 OneBot API
   const apiMatch = content.match(/^(api|API)\s*(\{[\s\S]*\}|\w+[\s\S]*)$/);
   if (apiMatch) {
     await handleApiCommand(apiMatch[2], event, ctx);
     return true;
   }
 
-  // pb{...} - 发送 ProtoBuf 元素
   const pbMatch = content.match(/^(pb|PB)\s*(\{[\s\S]*\})$/);
   if (pbMatch && groupId) {
     await handlePbCommand(pbMatch[2], groupId, event, ctx);
     return true;
   }
 
-  // pbl{...} - 发送长消息
   const pblMatch = content.match(/^(pbl|PBL)\s*(\{[\s\S]*\})$/);
   if (pblMatch && groupId) {
     await handlePblCommand(pblMatch[2], groupId, event, ctx);
     return true;
   }
 
-  // raw <cmd>\n{...} - 发送原始数据包
   const rawMatch = content.match(/^(raw|RAW)\s+(\S+)[\s\n]+(\{[\s\S]*\})$/);
   if (rawMatch) {
     await handleRawCommand(rawMatch[2], rawMatch[3], event, ctx);
     return true;
   }
 
-  // 取 <seq> - 按序号获取消息
   const getBySeqMatch = content.match(/^取\s*(\d+)$/);
   if (getBySeqMatch && groupId) {
     await handleGetBySeq(getBySeqMatch[1], groupId, event, ctx);
     return true;
   }
 
-  // 取 - 获取回复的消息
   if (content === '取' && groupId) {
     await handleGetReply(event, groupId, ctx);
     return true;
   }
 
-  // 取上一条 - 获取上一条消息
   if (content === '取上一条' && groupId) {
     await handleGetPrevious(event, groupId, ctx);
     return true;
   }
 
-  // 模式切换
   if (content === '模式取1') {
     setPacketMode(1);
     await sendReply(event, '✅ 已切换到模式1：平铺模式', ctx);
@@ -125,7 +110,6 @@ export async function handlePacketCommands (
   return false;
 }
 
-// 处理 API 命令
 async function handleApiCommand (
   body: string,
   event: OB11Message,
@@ -160,7 +144,6 @@ async function handleApiCommand (
   }
 }
 
-// 处理 PB 命令
 async function handlePbCommand (
   jsonStr: string,
   groupId: string,
@@ -176,7 +159,6 @@ async function handlePbCommand (
   }
 }
 
-// 处理 PBL 命令
 async function handlePblCommand (
   jsonStr: string,
   groupId: string,
@@ -192,7 +174,6 @@ async function handlePblCommand (
   }
 }
 
-// 处理 RAW 命令
 async function handleRawCommand (
   cmd: string,
   jsonStr: string,
@@ -212,7 +193,6 @@ async function handleRawCommand (
   }
 }
 
-// 处理按序号获取消息
 async function handleGetBySeq (
   targetSeq: string,
   groupId: string,
@@ -244,13 +224,11 @@ async function handleGetBySeq (
   }
 }
 
-// 处理获取回复消息
 async function handleGetReply (
   event: OB11Message,
   groupId: string,
   ctx: NapCatPluginContext
 ): Promise<void> {
-  // 检查是否回复了消息
   let replyId: string | undefined;
   const message = event.message;
   if (Array.isArray(message)) {
@@ -316,7 +294,6 @@ async function handleGetReply (
   }
 }
 
-// 处理获取上一条消息
 async function handleGetPrevious (
   event: OB11Message,
   groupId: string,
@@ -325,7 +302,6 @@ async function handleGetPrevious (
   try {
     let targetRealSeq: number | undefined;
 
-    // 检查是否回复了消息
     const message = event.message;
     if (Array.isArray(message)) {
       for (const seg of message) {
@@ -344,7 +320,6 @@ async function handleGetPrevious (
       }
     }
 
-    // 如果没有回复消息，则获取当前消息的 real_seq
     if (!targetRealSeq) {
       const currentMsgId = String(event.message_id);
       const msgInfo = await ctx.actions.call('get_msg', { message_id: currentMsgId } as never, ctx.adapterName, ctx.pluginManager.config) as Record<string, unknown>;
@@ -362,7 +337,6 @@ async function handleGetPrevious (
       return;
     }
 
-    // 获取上一条消息
     const previousSeq = targetRealSeq - 1;
     const result = await getMessagePb(ctx.actions, ctx.adapterName, ctx.pluginManager.config, groupId, '', String(previousSeq));
 
