@@ -2,7 +2,7 @@
 import type { NapCatPluginContext } from 'napcat-types/napcat-onebot/network/plugin-manger';
 import type { OB11Message } from 'napcat-types/napcat-onebot/types/index';
 import { pluginState } from '../core/state';
-import { MODEL_LIST, PLUGIN_VERSION } from '../config';
+import { MODEL_LIST, YTEA_MODEL_LIST, PLUGIN_VERSION, fetchModelList, fetchYteaModelList } from '../config';
 import { contextManager } from '../managers/context-manager';
 import { isOwner, startOwnerVerification, verifyOwnerCode, removeOwner, listOwners } from '../managers/owner-manager';
 import { userWatcherManager } from '../managers/user-watcher';
@@ -47,6 +47,7 @@ async function handleHelp (event: OB11Message, userId: string, ctx: NapCatPlugin
     if (pluginState.config.apiSource !== 'main') {
       masterCmds.push(`${prefix} 模型列表 - 查看AI模型`);
       masterCmds.push(`${prefix} 切换模型 <数字> - 切换模型`);
+      masterCmds.push(`${prefix} 刷新模型 - 重新获取模型列表`);
     }
     sections.push({ title: '🔧 主人管理', content: masterCmds.join('\n') });
     sections.push({
@@ -61,11 +62,42 @@ async function handleHelp (event: OB11Message, userId: string, ctx: NapCatPlugin
   await sendForwardMsg(event, sections, ctx);
 }
 
+// 当前 API 来源下的可用模型列表
+function getActiveModelList (): string[] {
+  if (pluginState.config.apiSource === 'ytea') return YTEA_MODEL_LIST;
+  if (pluginState.config.apiSource === 'custom') {
+    return pluginState.config.customModel ? [pluginState.config.customModel] : [];
+  }
+  return MODEL_LIST;
+}
+
+// 当前选中的模型
+function getActiveModel (): string {
+  if (pluginState.config.apiSource === 'ytea') return pluginState.config.yteaModel || YTEA_MODEL_LIST[0] || '';
+  if (pluginState.config.apiSource === 'custom') return pluginState.config.customModel || '';
+  return pluginState.config.model || 'gpt-5';
+}
+
+// 设置当前选中的模型
+function setActiveModel (model: string): void {
+  if (pluginState.config.apiSource === 'ytea') pluginState.config.yteaModel = model;
+  else if (pluginState.config.apiSource === 'custom') pluginState.config.customModel = model;
+  else pluginState.config.model = model;
+}
+
 // 模型列表
 async function handleListModels (event: OB11Message, ctx: NapCatPluginContext): Promise<void> {
-  const currentModel = pluginState.config.model || 'gpt-5';
-  const lines = ['🐱 可用模型列表喵～\n'];
-  MODEL_LIST.forEach((m, i) => lines.push(`${i + 1}. ${m}${m === currentModel ? ' ← 当前' : ''}`));
+  const list = getActiveModelList();
+  if (!list.length) {
+    const tip = pluginState.config.apiSource === 'ytea'
+      ? '📝 暂无模型，请先在配置填写 YTea 密钥，或发送「xy刷新模型」重新获取喵～'
+      : '📝 暂无可用模型喵～';
+    await sendReply(event, tip, ctx);
+    return;
+  }
+  const currentModel = getActiveModel();
+  const lines = [`🐱 可用模型列表（共${list.length}个）喵～\n`];
+  list.forEach((m, i) => lines.push(`${i + 1}. ${m}${m === currentModel ? ' ← 当前' : ''}`));
   lines.push('\n使用 xy切换模型<数字> 切换喵～');
   await sendReply(event, lines.join('\n'), ctx);
 }
@@ -76,13 +108,39 @@ async function handleSwitchModel (event: OB11Message, idx: string | undefined, c
     await handleListModels(event, ctx);
     return;
   }
+  const list = getActiveModelList();
   const i = parseInt(idx);
-  if (i >= 1 && i <= MODEL_LIST.length) {
-    pluginState.config.model = MODEL_LIST[i - 1];
-    await sendReply(event, `✅ 模型已切换为 ${pluginState.config.model} 喵～`, ctx);
+  if (i >= 1 && i <= list.length) {
+    setActiveModel(list[i - 1]);
+    await sendReply(event, `✅ 模型已切换为 ${list[i - 1]} 喵～`, ctx);
   } else {
-    await sendReply(event, `❌ 无效序号，请输入1-${MODEL_LIST.length}`, ctx);
+    await sendReply(event, `❌ 无效序号，请输入1-${list.length}`, ctx);
   }
+}
+
+// 刷新模型列表（运行时重新获取，无需重启）
+async function handleRefreshModels (event: OB11Message, ctx: NapCatPluginContext): Promise<void> {
+  if (pluginState.config.apiSource === 'ytea') {
+    if (!pluginState.config.ytApiKey) {
+      await sendReply(event, '❌ 未配置 YTea 密钥，无法获取模型喵～', ctx);
+      return;
+    }
+    await sendReply(event, '🔄 正在从 api.ytea.top 获取模型列表喵～', ctx);
+    const result = await fetchYteaModelList(pluginState.config.ytApiKey);
+    if (result.ok && result.models.length) {
+      await sendReply(event, `✅ 已获取 ${result.models.length} 个可对话模型喵～\n发送「xy模型列表」查看`, ctx);
+    } else {
+      await sendReply(event, `❌ 获取失败：${result.error || '未知错误'}`, ctx);
+    }
+    return;
+  }
+  if (pluginState.config.apiSource === 'main') {
+    await sendReply(event, '🔄 正在刷新主接口模型列表喵～', ctx);
+    const models = await fetchModelList();
+    await sendReply(event, `✅ 主接口共 ${models.length} 个模型喵～`, ctx);
+    return;
+  }
+  await sendReply(event, '📝 自定义API模式无需获取模型列表喵～', ctx);
 }
 
 // 主命令入口
@@ -113,6 +171,12 @@ export async function handleCommand (
       ? '📝 当前没有活跃上下文喵～'
       : `📝 对话轮数: ${info.turns} | 消息数: ${info.messages}`;
     await sendReply(event, msg, ctx);
+    return true;
+  }
+
+  // 主人命令 - 刷新模型列表（运行时重新获取，无需重启）
+  if ((cmd === '刷新模型' || cmd === '获取模型') && isOwner(userId)) {
+    await handleRefreshModels(event, ctx);
     return true;
   }
 

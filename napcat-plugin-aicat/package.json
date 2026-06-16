@@ -1,7 +1,7 @@
 {
   "name": "napcat-plugin-aicat",
   "plugin": "AI Cat",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "type": "module",
   "main": "index.mjs",
   "description": "智能AI猫娘助手插件，AI 对话帮助你群管理、自定义指令、定时任务等功能",
@@ -15,7 +15,7 @@
     "homepage": "https://github.com/lengxi-root/napcat-plugin-aicat"
   },
   "dependencies": {
-    "napcat-types": "0.0.9"
+    "napcat-types": "0.0.17"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^15.0.0",

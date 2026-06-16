@@ -1,5 +1,5 @@
 // NapCat AI Cat 插件 @author 冷曦
-import type { PluginModule, NapCatPluginContext, PluginConfigSchema } from 'napcat-types/napcat-onebot/network/plugin-manger';
+import type { PluginModule, NapCatPluginContext, PluginConfigSchema, PluginConfigUIController } from 'napcat-types/napcat-onebot/network/plugin-manger';
 import type { OB11Message } from 'napcat-types/napcat-onebot/types/index';
 import fs from 'fs';
 import path, { dirname } from 'path';
@@ -53,10 +53,12 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
 
   // 如果配置了 ytApiKey，拉取 ytea 模型列表
   if (pluginState.config.ytApiKey) {
-    try {
-      const yteaModels = await fetchYteaModelList(pluginState.config.ytApiKey);
-      pluginState.log('info', `YTea接口已获取 ${yteaModels.length} 个可用模型`);
-    } catch { /* ignore */ }
+    const result = await fetchYteaModelList(pluginState.config.ytApiKey);
+    if (result.ok) {
+      pluginState.log('info', `YTea接口已获取 ${result.models.length} 个可对话模型`);
+    } else {
+      pluginState.log('warn', `YTea接口模型获取失败：${result.error || '未知错误'}`);
+    }
   }
 
   // 配置UI（使用更新后的模型列表）
@@ -84,7 +86,7 @@ const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext
       { label: '🔑 YTea接口（自购密钥，无限制）', value: 'ytea' },
       { label: '🔧 自定义API', value: 'custom' },
     ], 'main', '主接口：自动切换模型，10轮上下文 | YTea/自定义：可选模型和轮数'),
-    ctx.NapCatConfig.text('ytApiKey', 'YTea密钥', '', '如 sk-xxx，选择「YTea接口」后生效，无每日次数限制'),
+    ctx.NapCatConfig.text('ytApiKey', 'YTea密钥', '', '如 sk-xxx，选择「YTea接口」后生效，无每日次数限制（填写后会自动拉取模型列表）', true),
     yteaModelSelect,
     ctx.NapCatConfig.boolean('autoSwitchModel', '自动切换模型', true, '模型失败时自动尝试其他可用模型'),
     ctx.NapCatConfig.select('maxContextTurns', '上下文轮数', [5, 10, 15, 20, 30].map(n => ({ label: `${n}轮`, value: n })), 30, '保留的对话历史轮数'),
@@ -160,6 +162,52 @@ export const plugin_set_config = async (ctx: NapCatPluginContext, config: Plugin
       fs.writeFileSync(resolved, JSON.stringify(config, null, 2), 'utf-8');
     }
   }
+};
+
+// 拉取 YTea 模型并实时更新配置页的「YTea模型」下拉框（无需重启）
+async function refreshYteaModelField (ui: PluginConfigUIController, apiKey: string): Promise<void> {
+  const key = (apiKey || '').trim();
+  if (!key) {
+    ui.updateField('yteaModel', { type: 'text', options: undefined, placeholder: '填写密钥后自动获取模型列表' });
+    return;
+  }
+  const result = await fetchYteaModelList(key);
+  if (result.ok && result.models.length) {
+    const current = String(ui.getCurrentConfig().yteaModel || '');
+    const value = result.models.includes(current) ? current : result.models[0];
+    ui.updateField('yteaModel', {
+      type: 'select',
+      options: result.models.map(m => ({ label: m, value: m })),
+      default: value,
+      description: `已获取 ${result.models.length} 个可对话模型`,
+    });
+  } else {
+    ui.updateField('yteaModel', {
+      type: 'text',
+      options: undefined,
+      description: `模型获取失败：${result.error || '未知错误'}，请检查密钥或稍后重试`,
+    });
+  }
+}
+
+// 配置界面打开时：若已填写 YTea 密钥则实时拉取模型列表
+export const plugin_config_controller = async (
+  _ctx: NapCatPluginContext,
+  ui: PluginConfigUIController,
+  initialConfig: Record<string, unknown>
+): Promise<void> => {
+  const key = String(initialConfig.ytApiKey || '');
+  if (key) await refreshYteaModelField(ui, key).catch(() => { });
+};
+
+// 响应式字段变化：YTea 密钥变更时实时刷新模型列表
+export const plugin_on_config_change = async (
+  _ctx: NapCatPluginContext,
+  ui: PluginConfigUIController,
+  key: string,
+  value: unknown
+): Promise<void> => {
+  if (key === 'ytApiKey') await refreshYteaModelField(ui, String(value || '')).catch(() => { });
 };
 
 // 插件清理

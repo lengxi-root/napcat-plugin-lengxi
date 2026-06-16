@@ -42,6 +42,44 @@ export let MODEL_LIST: string[] = [
 // YTea 接口模型列表（从 api.ytea.top 动态更新）
 export let YTEA_MODEL_LIST: string[] = [];
 
+// 非对话模型关键词（嵌入/绘图/语音/重排/审核等，自动切换时应跳过）
+const NON_CHAT_MODEL_KEYWORDS = [
+  'embedding', 'embed', 'rerank', 'moderation', 'guard',
+  'image', 'dall-e', 'dalle', 'midjourney', 'flux', 'stable-diffusion', 'sd-',
+  'tts', 'whisper', 'audio', 'speech', 'voice', 'realtime',
+  'video', 'sora', 'veo', 'kling', 'robotics', 'ocr',
+];
+
+// 判断是否为可对话模型（过滤掉嵌入/绘图/语音等非对话模型）
+export function isChatModel (id: string): boolean {
+  const lower = id.toLowerCase();
+  return !NON_CHAT_MODEL_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// 模型排序：常见对话模型族优先，其余按字母序
+const MODEL_FAMILY_ORDER = ['gpt', 'o1', 'o3', 'o4', 'claude', 'gemini', 'deepseek', 'grok', 'glm', 'qwen', 'llama'];
+function modelSortKey (id: string): [number, string] {
+  const lower = id.toLowerCase();
+  const family = MODEL_FAMILY_ORDER.findIndex(f => lower.includes(f));
+  return [family === -1 ? MODEL_FAMILY_ORDER.length : family, lower];
+}
+
+// 规整模型列表：去重 + 过滤非对话模型 + 排序
+export function normalizeChatModels (ids: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids) {
+    if (!id || seen.has(id) || !isChatModel(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result.sort((a, b) => {
+    const [fa, ka] = modelSortKey(a);
+    const [fb, kb] = modelSortKey(b);
+    return fa !== fb ? fa - fb : ka.localeCompare(kb);
+  });
+}
+
 // 默认AI配置
 export const DEFAULT_AI_CONFIG: AIConfig = {
   base_url: 'https://i.elaina.vin/api/openai/chat/completions',
@@ -65,22 +103,37 @@ export async function fetchModelList (): Promise<string[]> {
   return MODEL_LIST;
 }
 
-// 从 api.ytea.top 获取模型列表（需要密钥）
-export async function fetchYteaModelList (ytApiKey: string): Promise<string[]> {
-  if (!ytApiKey) return YTEA_MODEL_LIST;
+// YTea 接口地址
+export const YTEA_BASE = 'https://api.ytea.top';
+
+// 模型获取结果
+export interface FetchModelsResult {
+  ok: boolean;
+  models: string[];
+  error?: string;
+}
+
+// 从 api.ytea.top 获取模型列表（需要密钥），返回过滤排序后的可对话模型
+export async function fetchYteaModelList (ytApiKey: string): Promise<FetchModelsResult> {
+  if (!ytApiKey) return { ok: false, models: YTEA_MODEL_LIST, error: '未配置密钥' };
   try {
-    const res = await fetch('https://api.ytea.top/v1/models', {
+    const res = await fetch(`${YTEA_BASE}/v1/models`, {
       headers: { 'Authorization': `Bearer ${ytApiKey}` },
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(10000),
     });
-    if (res.ok) {
-      const data = await res.json() as { data?: { id: string; }[]; };
-      if (data.data?.length) {
-        YTEA_MODEL_LIST = data.data.map(m => m.id).filter(Boolean);
-      }
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => '')).slice(0, 200);
+      return { ok: false, models: YTEA_MODEL_LIST, error: `HTTP ${res.status}${detail ? ': ' + detail : ''}` };
     }
-  } catch { /* ignore */ }
-  return YTEA_MODEL_LIST;
+    const data = await res.json() as { data?: { id: string; }[]; };
+    const raw = (data.data || []).map(m => m.id).filter(Boolean);
+    if (!raw.length) return { ok: false, models: YTEA_MODEL_LIST, error: '返回模型列表为空' };
+    YTEA_MODEL_LIST = normalizeChatModels(raw);
+    return { ok: true, models: YTEA_MODEL_LIST };
+  } catch (e) {
+    const msg = e instanceof Error && e.name === 'TimeoutError' ? '请求超时' : String(e);
+    return { ok: false, models: YTEA_MODEL_LIST, error: msg };
+  }
 }
 
 // 获取主接口模型选项列表
