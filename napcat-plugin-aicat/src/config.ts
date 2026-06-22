@@ -1,13 +1,13 @@
-// AI Cat 插件配置
-import type { AIConfig, PluginConfig } from './types';
+import type { AIConfig, PluginConfig, ChannelConfig, ImageChannelConfig } from './types';
 
-// 插件版本号（plugin_init 时从同目录 package.json 动态读取）
 export let PLUGIN_VERSION = '0.0.0';
 export function setPluginVersion (version: string): void { PLUGIN_VERSION = version; }
 
-// 默认插件配置
+export const DEFAULT_CHAT_CHANNELS: ChannelConfig[] = [];
+export const DEFAULT_IMAGE_CHANNELS: ImageChannelConfig[] = [];
+
 export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
-  prefix: 'xy',
+  prefix: '/',
   enableReply: true,
   sendConfirmMessage: true,
   botName: '汐雨',
@@ -15,168 +15,152 @@ export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
   confirmMessage: '汐雨收到喵～',
   maxContextTurns: 30,
   ownerQQs: '',
-  model: 'gpt-5',
+  whitelistQQs: [],
   debug: false,
-  apiSource: 'main',
-  customApiUrl: '',
-  customApiKey: '',
-  customModel: 'gpt-4o',
   allowPublicPacket: true,
-  autoSwitchModel: true,
   allowAtTrigger: false,
   safetyFilter: true,
   disabledGroups: [],
-  ytApiKey: '',
-  yteaModel: '',
-};
+  autoSwitchModel: true,
 
-// 主接口模型列表（从 i.elaina.vin 动态更新）
-export let MODEL_LIST: string[] = [
-  'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5.1',
-  'gpt-4o', 'gpt-4o-mini', 'gpt-4', 'gpt-4-turbo',
-  'claude-3-5-sonnet', 'claude-3-5-haiku',
-  'deepseek-chat', 'deepseek-reasoner',
-  'gemini-2.5-flash', 'gemini-2.5-pro',
-];
+  webEnable: true,
+  webPort: 14514,
+  webToken: 'changeme',
 
-// YTea 接口模型列表（从 api.ytea.top 动态更新）
-export let YTEA_MODEL_LIST: string[] = [];
+  chatChannels: DEFAULT_CHAT_CHANNELS,
+  enabledChatModelPriority: [],
 
-// 默认AI配置
+  imageChannels: DEFAULT_IMAGE_CHANNELS,
+  enabledImageModelPriority: [],
+
+  imageEnableLLMTool: true,
+  imageDefaultAspectRatio: '自动',
+  imageDefaultResolution: '1K',
+  imageMaxConcurrentTasks: 3,
+  imageGlobalTimeoutMs: 180000,
+  imageShowGenerationInfo: false,
+  imageShowModelInfo: false,
+  imageRateLimitSeconds: 0,
+  imageEnableDailyLimit: false,
+  imageDailyLimitCount: 10,
+  imageMaxImageSizeMB: 10,
+  imageMaxCacheCount: 100,
+  imageUmoBlacklist: [],
+  imageBlacklistBlockMessage: '❌ 当前会话未启用生图功能',
+  ocrModel: '',
+  imageAuditWhitelist: [],
+  imagePromptBlockedWords: [],
+  imageEnablePromptAudit: false,
+  imageEnableOutputAudit: false,
+  imagePromptAuditModel: '',
+  imageOutputAuditModel: '',
+  imagePromptAuditTemplate: '你是生图安全审核员。请判断以下提示词是否安全。提示词：{prompt}。仅输出 JSON：{"allow":true/false,"reason":"原因"}',
+  imageOutputAuditTemplate: '你是图像安全审核员。请判断以下图片是否适合普通用户。仅输出 JSON：{"allow":true/false,"reason":"原因"}',
+
+  randomReplyChancePercent: 0,
+  randomActiveMessageCount: 50,
+  randomActiveIntervalMinutes: 0,
+  randomIgnoreQQs: [],
+} as PluginConfig;
+
 export const DEFAULT_AI_CONFIG: AIConfig = {
-  base_url: 'https://i.elaina.vin/api/openai/chat/completions',
+  base_url: 'https://api.openai.com/v1/chat/completions',
   api_key: '',
-  model: 'gpt-5',
+  model: 'gpt-4o',
   timeout: 60000,
 };
 
-// 从主接口获取模型列表
-export async function fetchModelList (): Promise<string[]> {
-  try {
-    const apiBase = DEFAULT_AI_CONFIG.base_url.replace('/chat/completions', '');
-    const res = await fetch(`${apiBase}/models`, { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      const data = await res.json() as { chat?: string[]; success?: boolean; };
-      if (data.success && data.chat?.length) {
-        MODEL_LIST = data.chat;
-      }
-    }
-  } catch { /* ignore */ }
-  return MODEL_LIST;
-}
+export let MODEL_LIST: string[] = [];
+export let YTEA_MODEL_LIST: string[] = [];
 
-// 从 api.ytea.top 获取模型列表（需要密钥）
-export async function fetchYteaModelList (ytApiKey: string): Promise<string[]> {
-  if (!ytApiKey) return YTEA_MODEL_LIST;
-  try {
-    const res = await fetch('https://api.ytea.top/v1/models', {
-      headers: { 'Authorization': `Bearer ${ytApiKey}` },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (res.ok) {
-      const data = await res.json() as { data?: { id: string; }[]; };
-      if (data.data?.length) {
-        YTEA_MODEL_LIST = data.data.map(m => m.id).filter(Boolean);
-      }
-    }
-  } catch { /* ignore */ }
-  return YTEA_MODEL_LIST;
-}
-
-// 获取主接口模型选项列表
-export function getModelOptions (): { label: string; value: string; }[] {
-  return MODEL_LIST.map(m => ({ label: m, value: m }));
-}
-
-// 获取 YTea 模型选项列表
-export function getYteaModelOptions (): { label: string; value: string; }[] {
-  return YTEA_MODEL_LIST.map(m => ({ label: m, value: m }));
-}
-
-// 检查模型是否可用（主接口）
-export function isModelAvailable (model: string): boolean {
-  return MODEL_LIST.includes(model);
-}
-
-// 检查模型是否可用（YTea 接口）
-export function isYteaModelAvailable (model: string): boolean {
-  return YTEA_MODEL_LIST.includes(model);
-}
-
-// 获取有效模型（如果不可用则返回默认模型）
-export function getValidModel (model: string): { model: string; forceAutoSwitch: boolean; } {
-  if (isModelAvailable(model)) {
-    return { model, forceAutoSwitch: false };
-  }
-  // 模型不可用，返回默认模型并强制自动切换
-  return { model: MODEL_LIST[0] || 'gpt-5', forceAutoSwitch: true };
-}
-
-// 上下文配置
 export const CONTEXT_MAX_TURNS = 30;
 export const CONTEXT_EXPIRE_SECONDS = 600;
 export const MAX_ROUNDS = 20;
 
-// 权限控制 API 集合
-// 公开接口(所有人可用): 发消息、戳一戳、点赞、查询消息、表情回应、AI语音等 - 不在限制集合中
-
-// 需要群管理员权限的接口
 export const ADMIN_REQUIRED_APIS = new Set([
-  // 群成员管理
-  'set_group_ban', 'set_group_kick', 'set_group_whole_ban', 'set_group_anonymous_ban',
+  'set_group_ban',
+  'set_group_kick',
+  'set_group_whole_ban',
+  'set_group_anonymous_ban',
   'kick_group_member_batch',
-  // 群权限管理
-  'set_group_admin', 'set_group_special_title',
-  // 群设置
-  'set_group_name', 'set_group_portrait', 'set_group_add_option',
-  'set_group_bot_add_option', 'set_group_search',
-  // 精华消息
-  'set_essence_msg', 'delete_essence_msg',
-  // 群公告
-  'send_group_notice', '_send_group_notice', '_delete_group_notice',
-  // 群文件管理
-  'delete_group_file', 'delete_group_folder',
-  // 群待办
+  'set_group_admin',
+  'set_group_special_title',
+  'set_group_name',
+  'set_group_portrait',
+  'set_group_add_option',
+  'set_group_bot_add_option',
+  'set_group_search',
+  'set_essence_msg',
+  'delete_essence_msg',
+  'send_group_notice',
+  '_send_group_notice',
+  '_delete_group_notice',
+  'delete_group_file',
+  'delete_group_folder',
   'set_group_todo',
-  // 加群请求处理
   'set_group_add_request',
 ]);
 
-// 仅主人可用的接口
 export const OWNER_ONLY_APIS = new Set([
-  // 账号敏感信息
-  'get_login_info', 'get_friend_list', 'get_group_list',
-  'get_friends_with_category', 'get_unidirectional_friend_list',
-  // 账号操作
-  'set_qq_avatar', 'set_self_longnick', 'set_qq_profile',
-  'set_online_status', 'set_custom_online_status',
-  // 好友敏感操作
-  'delete_friend', 'set_friend_add_request', 'set_friend_remark',
-  // 密钥相关
-  'get_cookies', 'get_csrf_token', 'get_credentials',
-  'nc_get_rkey', 'get_rkey', 'get_clientkey', 'get_rkey_server',
-  // 系统操作
-  'set_restart', 'clean_cache', '_get_model_show', '_set_model_show',
-  'get_online_clients', 'get_robot_uin_range', 'nc_get_packet_status',
-  // 收藏
-  'create_collection', 'get_collection_list',
-  // 危险操作
-  'log_out', 'send_packet', 'set_group_leave',
-  // 可疑好友
-  'get_doubtful_friends', 'set_doubtful_friend',
+  'get_login_info',
+  'get_friend_list',
+  'get_group_list',
+  'get_friends_with_category',
+  'get_unidirectional_friend_list',
+  'set_qq_avatar',
+  'set_self_longnick',
+  'set_qq_profile',
+  'set_online_status',
+  'set_custom_online_status',
+  'delete_friend',
+  'set_friend_add_request',
+  'set_friend_remark',
+  'get_cookies',
+  'get_csrf_token',
+  'get_credentials',
+  'nc_get_rkey',
+  'get_rkey',
+  'get_clientkey',
+  'get_rkey_server',
+  'set_restart',
+  'clean_cache',
+  '_get_model_show',
+  '_set_model_show',
+  'get_online_clients',
+  'get_robot_uin_range',
+  'nc_get_packet_status',
+  'create_collection',
+  'get_collection_list',
+  'log_out',
+  'send_packet',
+  'set_group_leave',
+  'get_doubtful_friends',
+  'set_doubtful_friend',
 ]);
 
-export const OWNER_ONLY_TOOLS = new Set(['query_error_logs']);
+export const OWNER_ONLY_TOOLS = new Set([
+  'query_error_logs',
+]);
+
 export const OWNER_ONLY_CUSTOM_TOOLS = new Set([
-  'add_custom_command', 'remove_custom_command', 'toggle_custom_command',
-  'add_scheduled_task', 'remove_scheduled_task', 'toggle_scheduled_task', 'run_scheduled_task_now',
-  'add_user_watcher', 'remove_user_watcher', 'toggle_user_watcher',
+  'add_custom_command',
+  'remove_custom_command',
+  'toggle_custom_command',
+
+  'add_scheduled_task',
+  'remove_scheduled_task',
+  'toggle_scheduled_task',
+  'run_scheduled_task_now',
+
+  'add_user_watcher',
+  'remove_user_watcher',
+  'toggle_user_watcher',
 ]);
 
-// 生成系统提示词
 export function generateSystemPrompt (botName = '汐雨', personality = ''): string {
   const defaultPersonality = '可爱猫娘助手，说话带"喵"等语气词，活泼俏皮会撒娇';
   const persona = personality || defaultPersonality;
+
   return `你是${botName}，${persona}。用call_api工具调用接口(action,params)
 
 【常用接口】
@@ -189,46 +173,27 @@ set_group_card{group_id,user_id,card} send_like{user_id,times} get_group_list{} 
 文本{"type":"text","data":{"text":""}}/图片{"type":"image","data":{"file":"URL"}}/at{"type":"at","data":{"qq":""}}/回复{"type":"reply","data":{"id":""}}/表情{"type":"face","data":{"id":""}}/语音{"type":"record","data":{"file":""}}/视频{"type":"video","data":{"file":""}}
 音乐卡片{"type":"music","data":{"type":"custom","url":"跳转链接","audio":"音频URL","title":"标题","image":"封面URL","content":"描述"}}
 
-【转发节点】node={user_id,nickname,content:[消息段]} 嵌套:content放node数组
-示例: [{node:普通},{node:content:[{node:子1},{node:子2}]}]
+【转发节点】
+node={user_id,nickname,content:[消息段]}
+嵌套转发：content 放 node 数组
 
-【定时任务工具(插件内置)】
-add_scheduled_task: 添加定时任务
-  参数: {task_id, task_type, target_type, target_id, content, daily_time?, interval_seconds?, run_now?}
-  task_type: send_message(发消息) | api_call(调用API)
-  target_type: group(群) | private(私聊)
-  daily_time: "HH:MM" 每日定时 / interval_seconds: 间隔秒数
-示例: add_scheduled_task({task_id:"morning",task_type:"send_message",target_type:"group",target_id:"123456",content:"早安喵～",daily_time:"08:00"})
-示例: add_scheduled_task({task_id:"hourly",task_type:"send_message",target_type:"group",target_id:"123456",content:"整点报时",interval_seconds:3600})
-remove_scheduled_task{task_id} / list_scheduled_tasks / toggle_scheduled_task{task_id} / run_scheduled_task_now{task_id}
+【插件工具】
+- 历史消息查询
+- 自定义指令管理
+- 定时任务管理
+- 用户监控管理
+- 网络搜索与网页抓取
+- 生图工具（如已启用）
 
-【用户监控工具(插件内置)】
-add_user_watcher: 添加消息监控器
-  参数: {watcher_id, target_user_id, group_id?, keyword_filter?, action_type, action_content?}
-  target_user_id: 指定QQ号 或 * 表示监控所有人
-  group_id: 指定群号(不填则监控所有群)
-  keyword_filter: 关键词过滤(不填则匹配所有消息)
-  action_type: reply(回复) | recall(撤回) | ban(禁言) | kick(踢出) | api_call(调用API)
-  action_content: 回复内容 或 API调用JSON
-示例: add_user_watcher({watcher_id:"ad_filter",target_user_id:"*",group_id:"123456",keyword_filter:"广告",action_type:"recall"})
-示例: add_user_watcher({watcher_id:"hello",target_user_id:"*",keyword_filter:"你好",action_type:"reply",action_content:"你好呀喵～"})
-remove_user_watcher{watcher_id} / list_user_watchers / toggle_user_watcher{watcher_id}
+【配置规则】
+基础开关、主人、白名单、生图限额、黑名单、审核、Web服务等配置在 NapCat 插件配置页或 Web 配置页修改。
+渠道、模型缓存、启用模型、模型优先级由核心主人通过群聊指令管理。
+普通用户不能通过 AI 工具修改配置、渠道、模型、检测器或定时任务。
 
-【消息记录工具(插件内置)】
-query_history_messages{group_id?,user_id?,keyword?,limit?,hours_ago?} 查询历史消息
-search_messages{pattern,group_id?,limit?} 正则搜索消息
-get_message_stats{group_id?} 获取消息统计
-get_message_by_id{message_id} 通过ID获取消息
-
-【网络工具】web_search{query} / fetch_url{url}
-
-【NapCat API文档 - 不熟悉的接口用fetch_url查询】
-完整接口索引: https://napcat.apifox.cn/llms.txt (包含所有API链接,先查这个找到具体接口URL)
-消息接口: https://napcat.apifox.cn/77363176f0.md
-群聊接口: https://napcat.apifox.cn/77363177f0.md
-账号接口: https://napcat.apifox.cn/77363175f0.md
-文件接口: https://napcat.apifox.cn/77363182f0.md
-
-【规则】回复直接输出纯文本(不要JSON消息段);用当前群号不跨群;无需调send_msg;每次只回复一条
-发送音乐卡片/语音/图片/视频等富媒体时必须用call_api调send_group_msg,message用消息段数组`;
+【规则】
+回复直接输出纯文本，不要输出 JSON 消息段。
+用当前群号，不跨群。
+无需调用 send_msg。
+每次只回复一条。
+发送音乐卡片、语音、图片、视频等富媒体时，必须用 call_api 调 send_group_msg 或 send_private_msg，message 使用消息段数组。`;
 }

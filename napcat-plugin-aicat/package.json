@@ -1,18 +1,20 @@
 {
   "name": "napcat-plugin-aicat",
-  "plugin": "AI Cat",
+  "plugin": "AI Cat 二改版",
   "version": "1.4.4",
   "type": "module",
   "main": "index.mjs",
-  "description": "智能AI猫娘助手插件，AI 对话帮助你群管理、自定义指令、定时任务等功能",
-  "author": "冷曦",
+  "description": "基于原作者冷曦的 AI Cat 二次修改版 NapCat 智能助手插件，支持 AI 对话、群管理、渠道模型指令管理、生图、自定义指令、定时任务、用户检测器、历史消息查询等功能",
+  "author": "余生只有凄渺",
   "napcat": {
     "tags": [
       "AI",
-      "娱乐"
+      "娱乐",
+      "群管",
+      "生图"
     ],
     "minVersion": "4.14.0",
-    "homepage": "https://github.com/lengxi-root/napcat-plugin-aicat"
+    "homepage": "https://github.com/liyw0205/napcat-plugin-lengxi"
   },
   "dependencies": {
     "napcat-types": "0.0.9"

@@ -1,178 +1,586 @@
-// NapCat AI Cat 插件 @author 冷曦
 import type { PluginModule, NapCatPluginContext, PluginConfigSchema } from 'napcat-types/napcat-onebot/network/plugin-manger';
 import type { OB11Message } from 'napcat-types/napcat-onebot/types/index';
+import type { PluginConfig } from './types';
 import fs from 'fs';
 import path, { dirname } from 'path';
 import { fileURLToPath } from 'url';
-import type { PluginConfig } from './types';
-import { DEFAULT_PLUGIN_CONFIG, PLUGIN_VERSION, setPluginVersion, fetchModelList, fetchYteaModelList, getYteaModelOptions } from './config';
-import { pluginState } from './core/state';
+import { cleanConfigForRuntime } from './core/config-service';
+import { initModelCacheStore } from './core/model-cache-store';
 import { handleCommand } from './handlers/command-handler';
+import { handleAICommand } from './handlers/ai-handler';
 import { contextManager } from './managers/context-manager';
 import { handlePacketCommands, handlePublicPacketCommands } from './handlers/packet-handler';
 import { processMessageContent, sendReply, startMessageCleanup, stopMessageCleanup } from './utils/message';
 import { executeApiTool } from './tools/api-tools';
-import { isOwner, initOwnerDataDir, cleanupExpiredVerifications, setNapCatLogger, setConfigOwners } from './managers/owner-manager';
+import {
+  isOwner,
+  initOwnerDataDir,
+  cleanupExpiredVerifications,
+  setNapCatLogger,
+  setConfigOwners,
+  setConfigWhitelist,
+} from './managers/owner-manager';
+import { modelMonitorManager } from './managers/model-monitor';
 import { commandManager, initDataDir } from './managers/custom-commands';
 import { taskManager, initTasksDataDir } from './managers/scheduled-tasks';
 import { userWatcherManager, initWatchersDataDir } from './managers/user-watcher';
 import { initMessageLogger, logMessage, cleanupOldMessages, closeMessageLogger } from './managers/message-logger';
 import { handleNoticeEvent, type NoticeEvent } from './managers/operation-tracker';
+import { handleImageCommand } from './handlers/image-handler';
+import { imageUsageManager } from './image/usage-manager';
+import { imageCacheManager } from './image/cache-manager';
+import { imagePresetManager } from './image/preset-manager';
+import { imagePersonaManager } from './image/persona-manager';
+import { imageTaskQueue } from './image/task-queue';
+import { buildPluginConfigUi } from './core/plugin-config-ui';
+import { pluginState } from './core/state';
+import { PLUGIN_VERSION, setPluginVersion } from './config';
+import { getPrioritizedChatTargets } from './core/channel-store';
 
 export let plugin_config_ui: PluginConfigSchema = [];
 
-// 插件初始化
+let oldMessageCleanupTimer: ReturnType<typeof setInterval> | null = null;
+let imageUsageCleanupTimer: ReturnType<typeof setInterval> | null = null;
+let imageCacheCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+interface RandomChatMessage {
+  userId: string;
+  nickname: string;
+  content: string;
+  messageId: string;
+  time: number;
+}
+
+interface RandomChatGroupState {
+  messages: RandomChatMessage[];
+  lastActiveAt: number;
+  running: boolean;
+}
+
+interface RandomReplyMeta {
+  replyToMessageId?: string;
+  atUserId?: string;
+}
+
+const randomChatStates = new Map<string, RandomChatGroupState>();
+
+function escapeRegExp (text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function clearExtraTimers (): void {
+  if (oldMessageCleanupTimer) {
+    clearInterval(oldMessageCleanupTimer);
+    oldMessageCleanupTimer = null;
+  }
+
+  if (imageUsageCleanupTimer) {
+    clearInterval(imageUsageCleanupTimer);
+    imageUsageCleanupTimer = null;
+  }
+
+  if (imageCacheCleanupTimer) {
+    clearInterval(imageCacheCleanupTimer);
+    imageCacheCleanupTimer = null;
+  }
+}
+
+function applyRuntimeConfigEffects (): void {
+  contextManager.setMaxTurns(pluginState.config.maxContextTurns);
+  imageTaskQueue.setMaxConcurrent(pluginState.config.imageMaxConcurrentTasks);
+  setConfigOwners(pluginState.config.ownerQQs || '');
+  setConfigWhitelist(pluginState.config.whitelistQQs || []);
+}
+
+function normalizeSlashShortcutText (raw: string): string {
+  return String(raw || '')
+    .replace(/\[CQ:reply,id=-?\d+\]/g, '')
+    .replace(/\[CQ:at,qq=\d+\]/g, '')
+    .trim();
+}
+
+function getSlashShortcutCommand (content: string): string {
+  const text = normalizeSlashShortcutText(content);
+  if (!text) return '';
+
+  const exactShortcuts = [
+    '形象查看',
+    '形象设置',
+    '形象清除',
+    '生图模型',
+    '预设',
+  ];
+
+  for (const name of exactShortcuts) {
+    const pattern = new RegExp(`^[\\/／]\\s*${escapeRegExp(name)}(?:\\s+([\\s\\S]+))?$`);
+    const match = text.match(pattern);
+    if (match) {
+      const rest = String(match[1] || '').trim();
+      return `${name}${rest ? ` ${rest}` : ''}`.trim();
+    }
+  }
+
+  const selfieMatch = text.match(/^[\/／]\s*自拍(?:\s+([\s\S]+))?$/);
+  if (selfieMatch) {
+    const rest = String(selfieMatch[1] || '').trim();
+    return `自拍${rest ? ` ${rest}` : ''}`.trim();
+  }
+
+  const imageMatch = text.match(/^[\/／]\s*生图(?:\s+([\s\S]+))?$/);
+  if (imageMatch) {
+    const rest = String(imageMatch[1] || '').trim();
+    return `生图${rest ? ` ${rest}` : ''}`.trim();
+  }
+
+  return '';
+}
+
+function getNumberConfig (key: string, fallback: number, min: number, max: number): number {
+  const cfg = pluginState.config as PluginConfig & Record<string, unknown>;
+  const n = Number(cfg[key]);
+
+  if (!Number.isFinite(n)) return fallback;
+
+  return Math.min(max, Math.max(min, n));
+}
+
+function getRandomReplyChancePercent (): number {
+  return getNumberConfig('randomReplyChancePercent', 5, 0, 100);
+}
+
+function getRandomActiveMessageCount (): number {
+  return Math.floor(getNumberConfig('randomActiveMessageCount', 50, 1, 500));
+}
+
+function getRandomActiveIntervalMinutes (): number {
+  return getNumberConfig('randomActiveIntervalMinutes', 300, 0, 10080);
+}
+
+function getRandomIgnoreQQs (): Set<string> {
+  const list = ((pluginState.config.randomIgnoreQQs || []) as unknown[])
+    .map(v => String(v).trim())
+    .filter(Boolean);
+  return new Set(list);
+}
+
+function shouldIgnoreRandomUser (userId: string, selfId: string): boolean {
+  const uid = String(userId || '').trim();
+  if (!uid) return true;
+  if (selfId && uid === selfId) return true;
+  return getRandomIgnoreQQs().has(uid);
+}
+
+function hasAvailableChatTarget (): boolean {
+  try {
+    return getPrioritizedChatTargets().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function cleanRandomMessageContent (raw: string): string {
+  return raw
+    .replace(/\[CQ:reply,id=-?\d+\]/g, '')
+    .replace(/\[CQ:at,qq=\d+\]/g, '')
+    .replace(/\[CQ:image,[^\]]+\]/g, '[图片]')
+    .replace(/\[CQ:record,[^\]]+\]/g, '[语音]')
+    .replace(/\[CQ:video,[^\]]+\]/g, '[视频]')
+    .trim()
+    .slice(0, 500);
+}
+
+function getRandomState (groupId: string): RandomChatGroupState {
+  const existed = randomChatStates.get(groupId);
+
+  if (existed) return existed;
+
+  const state: RandomChatGroupState = {
+    messages: [],
+    lastActiveAt: Date.now(),
+    running: false,
+  };
+
+  randomChatStates.set(groupId, state);
+  return state;
+}
+
+function rememberRandomChatMessage (
+  groupId: string,
+  userId: string,
+  nickname: string,
+  raw: string,
+  messageId: string
+): void {
+  const content = cleanRandomMessageContent(raw);
+  if (!content) return;
+
+  const state = getRandomState(groupId);
+  const maxCount = getRandomActiveMessageCount();
+
+  state.messages.push({
+    userId,
+    nickname,
+    content,
+    messageId,
+    time: Date.now(),
+  });
+
+  if (state.messages.length > maxCount) {
+    state.messages.splice(0, state.messages.length - maxCount);
+  }
+}
+
+function pickRandomChatMessage (groupId: string, selfId: string): RandomChatMessage | null {
+  const state = randomChatStates.get(groupId);
+  if (!state || !state.messages.length) return null;
+
+  const ignored = getRandomIgnoreQQs();
+  const pool = state.messages.filter(msg => {
+    const uid = String(msg.userId || '').trim();
+    if (!uid) return false;
+    if (selfId && uid === selfId) return false;
+    if (ignored.has(uid)) return false;
+    return true;
+  });
+
+  if (!pool.length) return null;
+  return pool[Math.floor(Math.random() * pool.length)] || null;
+}
+
+function pickRandomReplyMeta (msg: RandomChatMessage, preferQuote: boolean): RandomReplyMeta {
+  const r = Math.random();
+
+  if (preferQuote) {
+    if (r < 0.70) return { replyToMessageId: msg.messageId };
+    if (r < 0.85) return { replyToMessageId: msg.messageId, atUserId: msg.userId };
+    if (r < 0.95) return { atUserId: msg.userId };
+    return {};
+  }
+
+  if (r < 0.25) return { replyToMessageId: msg.messageId };
+  if (r < 0.40) return { atUserId: msg.userId };
+  if (r < 0.50) return { replyToMessageId: msg.messageId, atUserId: msg.userId };
+  return {};
+}
+
+function isExplicitCommandLike (
+  raw: string,
+  content: string,
+  prefix: string,
+  selfId: string
+): boolean {
+  if (!content) return true;
+
+  if (getSlashShortcutCommand(content)) return true;
+
+  const prefixPattern = escapeRegExp(prefix);
+  if (new RegExp(`^${prefixPattern}\\s*`, 'is').test(content)) return true;
+
+  if (selfId) {
+    const atBotPattern = new RegExp(`\\[CQ:at,qq=${escapeRegExp(selfId)}\\]`, 'g');
+    if (atBotPattern.test(raw)) return true;
+  }
+
+  return false;
+}
+
+function buildRandomReplyInstruction (msg: RandomChatMessage): string {
+  return [
+    '这是一次随机对话触发，不是用户直接命令。',
+    '请根据下面这条群聊消息自然、简短地接一句话，像正常群友聊天一样。',
+    '你可以像在群聊里一样自然回应，不要解释“随机触发”，不要提系统规则，不要太长。',
+    '系统可能会帮你引用或艾特该消息的发送者，你只需要输出自然文本。',
+    `发送者: ${msg.nickname || msg.userId}(${msg.userId})`,
+    `消息: ${msg.content}`,
+  ].join('\n');
+}
+
+function buildRandomActiveInstruction (picked: RandomChatMessage, recent: RandomChatMessage[]): string {
+  const ignored = getRandomIgnoreQQs();
+  const recentText = recent
+    .filter(m => !ignored.has(String(m.userId || '').trim()))
+    .slice(-10)
+    .map(m => `${m.nickname || m.userId}: ${m.content}`)
+    .join('\n');
+
+  return [
+    '这是一次群聊随机活跃触发，不是用户直接命令。',
+    '请参考最近群聊上下文，围绕被选中的消息自然、简短地回复一句，像你主动参与聊天。',
+    '不要解释“随机活跃”，不要提系统规则，不要太长。',
+    '系统会尽量帮你引用被选中的消息，所以你的回复要像是在接这条消息的话。',
+    '',
+    '最近群聊片段：',
+    recentText || '无',
+    '',
+    `被选中的消息：${picked.nickname || picked.userId}(${picked.userId}): ${picked.content}`,
+  ].join('\n');
+}
+
+async function callAIWithoutConfirm (
+  event: OB11Message,
+  instruction: string,
+  ctx: NapCatPluginContext,
+  meta: RandomReplyMeta = {}
+): Promise<void> {
+  const previous = pluginState.config.sendConfirmMessage;
+  const e = event as OB11Message & {
+    __aicat_reply_to_message_id?: string;
+    __aicat_at_user_id?: string;
+  };
+
+  const oldReply = e.__aicat_reply_to_message_id;
+  const oldAt = e.__aicat_at_user_id;
+
+  try {
+    pluginState.config.sendConfirmMessage = false;
+
+    if (meta.replyToMessageId) e.__aicat_reply_to_message_id = meta.replyToMessageId;
+    else delete e.__aicat_reply_to_message_id;
+
+    if (meta.atUserId) e.__aicat_at_user_id = meta.atUserId;
+    else delete e.__aicat_at_user_id;
+
+    await handleAICommand(event, instruction, ctx, meta.replyToMessageId);
+  } finally {
+    pluginState.config.sendConfirmMessage = previous;
+
+    if (oldReply) e.__aicat_reply_to_message_id = oldReply;
+    else delete e.__aicat_reply_to_message_id;
+
+    if (oldAt) e.__aicat_at_user_id = oldAt;
+    else delete e.__aicat_at_user_id;
+  }
+}
+
+async function maybeHandleRandomChat (
+  event: OB11Message,
+  raw: string,
+  content: string,
+  ctx: NapCatPluginContext,
+  prefix: string,
+  selfId: string
+): Promise<boolean> {
+  const groupId = event.group_id ? String(event.group_id) : '';
+  if (!groupId) return false;
+  if (pluginState.isGroupAIDisabled(groupId)) return false;
+  if (isExplicitCommandLike(raw, content, prefix, selfId)) return false;
+
+  // 关闭回复时，随机回复 / 随机活跃一起关闭
+  if (pluginState.config.enableReply === false) return false;
+
+  if (!hasAvailableChatTarget()) return false;
+
+  const userId = String(event.user_id);
+  if (shouldIgnoreRandomUser(userId, selfId)) return false;
+
+  const sender = event.sender as { nickname?: string; card?: string; } | undefined;
+  const nickname = sender?.card || sender?.nickname || '';
+
+  rememberRandomChatMessage(groupId, userId, nickname, raw, String(event.message_id));
+
+  const state = getRandomState(groupId);
+  if (state.running) return false;
+
+  const now = Date.now();
+  const activeIntervalMinutes = getRandomActiveIntervalMinutes();
+  const activeIntervalMs = activeIntervalMinutes * 60 * 1000;
+
+  if (activeIntervalMinutes > 0 && state.messages.length > 0 && now - state.lastActiveAt >= activeIntervalMs) {
+    const picked = pickRandomChatMessage(groupId, selfId);
+
+    if (picked) {
+      state.lastActiveAt = now;
+      state.running = true;
+
+      try {
+        await callAIWithoutConfirm(
+          event,
+          buildRandomActiveInstruction(picked, state.messages),
+          ctx,
+          pickRandomReplyMeta(picked, true)
+        );
+      } finally {
+        state.running = false;
+      }
+
+      return true;
+    }
+  }
+
+  const chance = getRandomReplyChancePercent();
+  if (chance > 0 && Math.random() * 100 < chance) {
+    const msg = pickRandomChatMessage(groupId, selfId);
+
+    if (msg) {
+      state.running = true;
+
+      try {
+        await callAIWithoutConfirm(
+          event,
+          buildRandomReplyInstruction(msg),
+          ctx,
+          pickRandomReplyMeta(msg, false)
+        );
+      } finally {
+        state.running = false;
+      }
+
+      return true;
+    }
+  }
+
+  return false;
+}
+
 const plugin_init: PluginModule['plugin_init'] = async (ctx: NapCatPluginContext) => {
-  // 设置全局状态
   Object.assign(pluginState, {
     logger: ctx.logger,
     actions: ctx.actions,
     adapterName: ctx.adapterName,
     networkConfig: ctx.pluginManager.config,
   });
+
   pluginState.log('info', 'AI Cat 插件正在初始化喵～');
 
-  // 从同目录 package.json 动态读取版本号
   try {
     const pluginDir = dirname(fileURLToPath(import.meta.url));
     const pkg = JSON.parse(fs.readFileSync(path.join(pluginDir, 'package.json'), 'utf-8'));
     if (pkg.version) setPluginVersion(pkg.version);
-  } catch { /* ignore */ }
+  } catch {}
 
-  // 先获取最新模型列表（等待完成后再生成配置UI）
-  // 加载配置（需要先加载才能拿到 ytApiKey）
-  if (fs.existsSync(ctx.configPath)) {
-    pluginState.config = { ...DEFAULT_PLUGIN_CONFIG, ...JSON.parse(fs.readFileSync(ctx.configPath, 'utf-8')) };
-  }
+  const dataPath = ctx.configPath
+    ? dirname(ctx.configPath)
+    : path.join(process.cwd(), 'data');
+
   pluginState.configPath = ctx.configPath || '';
 
-  try {
-    const models = await fetchModelList();
-    pluginState.log('info', `主接口已获取 ${models.length} 个可用模型`);
-  } catch { /* 获取失败使用默认列表 */ }
+  let runtimeConfigSource: Record<string, unknown> = {};
 
-  // 如果配置了 ytApiKey，拉取 ytea 模型列表
-  if (pluginState.config.ytApiKey) {
+  if (pluginState.configPath && fs.existsSync(pluginState.configPath)) {
     try {
-      const yteaModels = await fetchYteaModelList(pluginState.config.ytApiKey);
-      pluginState.log('info', `YTea接口已获取 ${yteaModels.length} 个可用模型`);
-    } catch { /* ignore */ }
+      runtimeConfigSource = JSON.parse(fs.readFileSync(pluginState.configPath, 'utf-8')) as Record<string, unknown>;
+    } catch (e) {
+      pluginState.log('warn', `读取配置文件失败，使用运行时配置: ${String(e)}`);
+    }
   }
 
-  // 配置UI（使用更新后的模型列表）
-  const yteaOpts = getYteaModelOptions();
-  const yteaModelSelect = yteaOpts.length
-    ? ctx.NapCatConfig.select('yteaModel', 'YTea模型', yteaOpts, yteaOpts[0]?.value || '', '从 api.ytea.top 获取的模型列表')
-    : ctx.NapCatConfig.text('yteaModel', 'YTea模型', '', '填写密钥并重启后自动获取模型列表');
+  if (!Object.keys(runtimeConfigSource).length) {
+    runtimeConfigSource =
+      (ctx.pluginManager?.config && typeof ctx.pluginManager.config === 'object')
+        ? ctx.pluginManager.config as Record<string, unknown>
+        : {};
+  }
 
-  plugin_config_ui = ctx.NapCatConfig.combine(
-    ctx.NapCatConfig.html(`<div style="padding:10px;background:#f5f5f5;border-radius:8px;margin-bottom:10px"><b>🐱 AI Cat 智能猫娘助手 v${PLUGIN_VERSION}</b><br/><span style="color:#666;font-size:13px">使用 <code>xy帮助</code> 查看指令 | 交流群：1085402468</span></div>`),
-    // 基础设置
-    ctx.NapCatConfig.html('<b>📌 基础设置</b>'),
-    ctx.NapCatConfig.text('prefix', '指令前缀', 'xy', '触发AI对话的前缀'),
-    ctx.NapCatConfig.boolean('allowAtTrigger', '艾特触发', false, '允许@机器人时无需前缀直接触发'),
-    ctx.NapCatConfig.text('botName', '机器人名称', '汐雨', '机器人显示名称'),
-    ctx.NapCatConfig.text('personality', 'AI个性', '可爱猫娘助手，说话带"喵"等语气词，活泼俏皮会撒娇', 'AI的性格描述，会影响回复风格'),
-    ctx.NapCatConfig.text('ownerQQs', '主人QQ', '', '多个用逗号分隔'),
-    ctx.NapCatConfig.boolean('enableReply', '启用回复', true, '是否启用消息回复功能'),
-    ctx.NapCatConfig.boolean('sendConfirmMessage', '发送确认消息', true, '收到指令后发送确认提示'),
-    ctx.NapCatConfig.text('confirmMessage', '确认消息内容', '汐雨收到喵～', '确认提示的文本内容'),
-    // AI 配置
-    ctx.NapCatConfig.html('<b>🤖 AI 配置</b> <span style="color:#999;font-size:12px">主接口免费50次/天 | 填写YTea密钥可解除限制，前往 <a href="https://api.ytea.top/" target="_blank">api.ytea.top</a> 免费签到和订阅获取</span>'),
-    ctx.NapCatConfig.select('apiSource', 'API来源', [
-      { label: '🆓 主接口（免费50次/天）', value: 'main' },
-      { label: '🔑 YTea接口（自购密钥，无限制）', value: 'ytea' },
-      { label: '🔧 自定义API', value: 'custom' },
-    ], 'main', '主接口：自动切换模型，10轮上下文 | YTea/自定义：可选模型和轮数'),
-    ctx.NapCatConfig.text('ytApiKey', 'YTea密钥', '', '如 sk-xxx，选择「YTea接口」后生效，无每日次数限制'),
-    yteaModelSelect,
-    ctx.NapCatConfig.boolean('autoSwitchModel', '自动切换模型', true, '模型失败时自动尝试其他可用模型'),
-    ctx.NapCatConfig.select('maxContextTurns', '上下文轮数', [5, 10, 15, 20, 30].map(n => ({ label: `${n}轮`, value: n })), 30, '保留的对话历史轮数'),
-    // 自定义 API
-    ctx.NapCatConfig.html('<b>🔧 自定义API</b> <span style="color:#999;font-size:12px">仅选择「自定义API」时生效</span>'),
-    ctx.NapCatConfig.text('customApiUrl', 'API地址', '', '如 https://api.openai.com/v1/chat/completions'),
-    ctx.NapCatConfig.text('customApiKey', 'API密钥', '', '如 sk-xxx'),
-    ctx.NapCatConfig.text('customModel', '模型名称', 'gpt-4o', '如 gpt-4o'),
-    // 高级设置
-    ctx.NapCatConfig.html('<b>⚙️ 高级设置</b>'),
-    ctx.NapCatConfig.boolean('debug', '调试模式', false, '显示详细调试日志'),
-    ctx.NapCatConfig.boolean('allowPublicPacket', '公开取指令', true, '允许所有人使用"取"指令'),
-    ctx.NapCatConfig.boolean('safetyFilter', '安全过滤', true, '开启后禁止普通用户通过AI发送图片/语音/视频等媒体内容，关闭则允许（主人不受限制）')
-  );
+  pluginState.config = cleanConfigForRuntime(runtimeConfigSource);
 
-  // 初始化配置相关
-  if (pluginState.config.ownerQQs) setConfigOwners(pluginState.config.ownerQQs);
+  plugin_config_ui = buildPluginConfigUi(ctx);
+  pluginState.setRuntimeConfigSyncer(applyRuntimeConfigEffects);
+
+  applyRuntimeConfigEffects();
+
   if (ctx.logger) setNapCatLogger((msg: string) => ctx.logger?.info(msg));
 
-  // 初始化数据目录
-  const dataPath = ctx.configPath ? dirname(ctx.configPath) : path.join(process.cwd(), 'data');
   initDataDir(dataPath);
   initTasksDataDir(dataPath);
   initWatchersDataDir(dataPath);
   initOwnerDataDir(dataPath);
+  initModelCacheStore(dataPath);
   await initMessageLogger(dataPath);
 
-  // 启动定时清理
+  applyRuntimeConfigEffects();
+
+  imageUsageManager.init(dataPath);
+  imageCacheManager.init(dataPath);
+  imagePresetManager.init(dataPath);
+  imagePersonaManager.init(dataPath);
+  modelMonitorManager.init(dataPath);
+
   pluginState.setVerificationCleanupInterval(setInterval(() => cleanupExpiredVerifications(), 60000));
-  setInterval(() => cleanupOldMessages(7), 24 * 60 * 60 * 1000);
+
+  clearExtraTimers();
+  oldMessageCleanupTimer = setInterval(() => cleanupOldMessages(7), 24 * 60 * 60 * 1000);
+  imageUsageCleanupTimer = setInterval(() => imageUsageManager.cleanupExpired(), 24 * 60 * 60 * 1000);
+  imageCacheCleanupTimer = setInterval(() => imageCacheManager.cleanup(), 6 * 60 * 60 * 1000);
+
   startMessageCleanup();
   contextManager.startCleanup();
 
-  // 配置消息发送器
   taskManager.setMessageSender(async (type, id, content) => {
     if (!pluginState.actions || !pluginState.networkConfig) return;
+
     const msg = taskManager.parseMessageContent(content);
     const action = type === 'group' ? 'send_group_msg' : 'send_private_msg';
-    const param = type === 'group' ? { group_id: id, message: msg } : { user_id: id, message: msg };
-    await pluginState.actions.call(action, param as never, pluginState.adapterName, pluginState.networkConfig).catch(() => { });
+    const param = type === 'group'
+      ? { group_id: id, message: msg }
+      : { user_id: id, message: msg };
+
+    await pluginState.actions.call(action, param as never, pluginState.adapterName, pluginState.networkConfig).catch(() => {});
   });
 
-  // 配置 API 调用器
   userWatcherManager.setApiCaller(async (action, params) => {
-    if (!pluginState.actions || !pluginState.networkConfig) return { success: false, error: 'actions未初始化' };
+    if (!pluginState.actions || !pluginState.networkConfig) {
+      return { success: false, error: 'actions未初始化' };
+    }
+
     try {
       return await executeApiTool(pluginState.actions, pluginState.adapterName, pluginState.networkConfig, { action, params });
-    } catch (e) { return { success: false, error: String(e) }; }
+    } catch (e) {
+      return { success: false, error: String(e) };
+    }
   });
 
-  // 初始化延迟加载的组件
   commandManager.init();
   userWatcherManager.init();
   taskManager.init();
-
   taskManager.startScheduler();
 
-  pluginState.log('info', 'AI Cat 插件初始化完成喵～');
+  pluginState.log('info', `AI Cat 插件初始化完成喵～ v${PLUGIN_VERSION}`);
+  pluginState.log('info', `当前配置: webEnable=${String(pluginState.config.webEnable)}, webPort=${String(pluginState.config.webPort)}`);
 };
 
-// 获取配置
-export const plugin_get_config = async (): Promise<PluginConfig> => pluginState.config;
+export const plugin_get_config = async (): Promise<PluginConfig> => {
+  const cloned = JSON.parse(JSON.stringify(pluginState.config || {})) as PluginConfig;
 
-// 保存配置
+  /**
+   * NapCat 配置页不适合展示复杂对象数组。
+   * 渠道、模型缓存、启用模型、优先级请通过 Web 面板 / 群聊指令维护。
+   */
+  delete (cloned as Record<string, unknown>).chatChannels;
+  delete (cloned as Record<string, unknown>).imageChannels;
+  delete (cloned as Record<string, unknown>).enabledChatModelPriority;
+  delete (cloned as Record<string, unknown>).enabledImageModelPriority;
+
+  return cloned;
+};
+
 export const plugin_set_config = async (ctx: NapCatPluginContext, config: PluginConfig): Promise<void> => {
-  pluginState.config = config;
-  if (config.ownerQQs !== undefined) setConfigOwners(config.ownerQQs);
-  if (ctx?.configPath) {
-    const resolved = path.resolve(ctx.configPath);
-    if (resolved.includes('napcat')) {
-      const dir = path.dirname(resolved);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(resolved, JSON.stringify(config, null, 2), 'utf-8');
-    }
-  }
+  pluginState.configPath = ctx?.configPath || pluginState.configPath;
+
+  // 关键修复：
+  // NapCat 配置页只会提交 schema 中存在的字段。
+  // 如果直接 cleanConfigForRuntime(config)，未出现在 schema 里的字段会被默认值覆盖。
+  // 这里改成基于当前配置做 merge，避免保存时丢失未暴露字段。
+  pluginState.config = cleanConfigForRuntime({
+    ...pluginState.config,
+    ...(config as Partial<PluginConfig>),
+  });
+
+  applyRuntimeConfigEffects();
+  pluginState.saveConfig();
+  pluginState.log('info', `配置已更新: webEnable=${String(pluginState.config.webEnable)}, webPort=${String(pluginState.config.webPort)}`);
 };
 
-// 插件清理
 const plugin_cleanup: PluginModule['plugin_cleanup'] = async () => {
   pluginState.log('info', 'AI Cat 插件正在卸载喵～');
   taskManager.stopScheduler();
   pluginState.clearVerificationCleanupInterval();
+  clearExtraTimers();
   stopMessageCleanup();
   contextManager.stopCleanup();
   closeMessageLogger();
+  randomChatStates.clear();
 };
 
-// 消息处理
 const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPluginContext, event: OB11Message) => {
   if (event.post_type !== 'message') return;
 
@@ -181,7 +589,6 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
   const groupId = event.group_id ? String(event.group_id) : undefined;
   const sender = event.sender as { nickname?: string; } | undefined;
 
-  // 记录消息
   logMessage({
     message_id: String(event.message_id),
     user_id: userId,
@@ -194,68 +601,95 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
     timestamp: event.time,
   });
 
-  // 用户检测器
-  const watchResult = await userWatcherManager.checkAndExecute(userId, groupId || '', raw, String(event.message_id)).catch(() => null);
+  const watchResult = await userWatcherManager.checkAndExecute(
+    userId,
+    groupId || '',
+    raw,
+    String(event.message_id)
+  ).catch(() => null);
+
   if (watchResult) pluginState.log('info', `检测器触发: ${watchResult.watcherId}`);
 
-  // 自定义命令
-  const cmdResp = await commandManager.matchAndExecute(raw.trim(), userId, groupId || '', sender?.nickname || '').catch(() => null);
+  const cmdResp = await commandManager.matchAndExecute(
+    raw.trim(),
+    userId,
+    groupId || '',
+    sender?.nickname || ''
+  ).catch(() => null);
+
   if (cmdResp) {
     await sendReply(event, cmdResp, ctx);
     return;
   }
 
-  // 公开的"取"指令
   if (pluginState.config.allowPublicPacket && ctx.actions) {
     const publicResult = await handlePublicPacketCommands(raw, event, ctx);
     if (publicResult) return;
   }
 
-  // 主人专属 Packet 指令
   if (isOwner(userId) && ctx.actions) {
     const packetResult = await handlePacketCommands(raw, event, ctx);
     if (packetResult) return;
   }
 
-  // AI 对话处理
   const { content, replyMessageId } = processMessageContent(raw);
-  if (pluginState.config.enableReply === false) return;
-
-  // 检查群AI开关（禁用时仍允许开关命令和状态查询）
   const prefix = pluginState.config.prefix || 'xy';
+  const prefixPattern = escapeRegExp(prefix);
   const selfId = String(event.self_id || '');
 
-  if (groupId && pluginState.isGroupAIDisabled(groupId)) {
-    // 仅放行开关相关命令
-    const prefixMatch = content.match(new RegExp(`^${prefix}\\s*(.*)`, 'is'));
-    const cmdText = prefixMatch?.[1]?.trim() || '';
-    if (['开启AI', '关闭AI', 'AI状态', '帮助'].includes(cmdText)) {
-      await handleCommand(event, cmdText, ctx, replyMessageId);
-    }
+  const slashShortcut = getSlashShortcutCommand(raw || content);
+  if (slashShortcut) {
+    if (await handleImageCommand(event, slashShortcut, ctx)) return;
     return;
   }
 
-  // 检测是否艾特了机器人（仅在开启 allowAtTrigger 时生效）
+  if (groupId && pluginState.isGroupAIDisabled(groupId)) {
+    const prefixMatch = content.match(new RegExp(`^${prefixPattern}\\s*(.*)`, 'is'));
+    const cmdText = prefixMatch?.[1]?.trim() || '';
+
+    if (['开启AI', '关闭AI', 'AI状态', '帮助'].includes(cmdText)) {
+      await handleCommand(event, cmdText, ctx, replyMessageId);
+    }
+
+    return;
+  }
+
+  if (await maybeHandleRandomChat(event, raw, content, ctx, prefix, selfId)) return;
+
   let instruction = '';
+
+  // 允许无前缀 @机器人 触发
+  // 这里不再受 enableReply 控制，这样即使关闭普通 AI 对话，也仍然可以 @机器人 触发生图/自拍类命令
   if (pluginState.config.allowAtTrigger && selfId) {
-    const atBotPattern = new RegExp(`\\[CQ:at,qq=${selfId}\\]`, 'g');
+    const atBotPattern = new RegExp(`\\[CQ:at,qq=${escapeRegExp(selfId)}\\]`, 'g');
+
     if (atBotPattern.test(raw)) {
-      // 去掉机器人的@，保留其他用户的@
-      instruction = raw.replace(atBotPattern, '').replace(/\[CQ:reply,id=-?\d+\]/g, '').trim();
+      const atText = raw
+        .replace(atBotPattern, '')
+        .replace(/\[CQ:reply,id=-?\d+\]/g, '')
+        .trim();
+
+      instruction = atText.trim();
     }
   }
 
-  // 如果没有通过艾特触发，则尝试前缀匹配
   if (!instruction) {
-    const match = content.match(new RegExp(`^${prefix}\\s*(.*)`, 'is'));
+    const match = content.match(new RegExp(`^${prefixPattern}\\s*(.*)`, 'is'));
     if (!match) return;
     instruction = match[1].trim();
   }
 
+  // 优先处理图片相关命令，包括：
+  // - /生图
+  // - /自拍
+  // - /看看你
+  // - @机器人 看看你
+  // - @机器人 你长这个看看
+  if (await handleImageCommand(event, instruction, ctx)) return;
+
   await handleCommand(event, instruction, ctx, replyMessageId);
 };
 
-// 事件处理
 const plugin_onevent: PluginModule['plugin_onevent'] = async (_ctx: NapCatPluginContext, event: unknown) => {
   const e = event as { post_type?: string; notice_type?: string; };
 

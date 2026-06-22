@@ -1,13 +1,9 @@
-// 消息安全检测 - 防止普通用户通过指令注入CQ码/OneBot消息段让机器人执行危险操作
 import { pluginState } from '../core/state';
 
-// 危险的CQ码类型（媒体类型，可能导致封号）
 const DANGEROUS_CQ_TYPES = new Set(['image', 'record', 'video', 'flash']);
 
-// 所有CQ码正则（匹配 [CQ:type,...] 格式）
 const CQ_CODE_REGEX = /\[CQ:(\w+)(?:,[^\]]+)?\]/g;
 
-// OneBot JSON消息段正则（匹配 {"type":"xxx","data":{...}} 格式）
 const ONEBOT_SEGMENT_REGEX = /\{\s*"type"\s*:\s*"(\w+)"\s*,\s*"data"\s*:\s*\{[^}]*\}\s*\}/g;
 
 /**
@@ -15,7 +11,6 @@ const ONEBOT_SEGMENT_REGEX = /\{\s*"type"\s*:\s*"(\w+)"\s*,\s*"data"\s*:\s*\{[^}
  * 返回 null 表示安全，返回描述字符串表示检测到的危险内容
  */
 export function detectUserInputDanger (instruction: string): string | null {
-  // 检查CQ码
   for (const match of instruction.matchAll(CQ_CODE_REGEX)) {
     const cqType = match[1];
     if (DANGEROUS_CQ_TYPES.has(cqType)) {
@@ -24,7 +19,6 @@ export function detectUserInputDanger (instruction: string): string | null {
     }
   }
 
-  // 检查OneBot JSON消息段格式
   for (const match of instruction.matchAll(ONEBOT_SEGMENT_REGEX)) {
     const segType = match[1];
     if (DANGEROUS_CQ_TYPES.has(segType)) {
@@ -43,7 +37,6 @@ export function detectUserInputDanger (instruction: string): string | null {
 export function sanitizeUserInput (instruction: string): string {
   let result = instruction;
 
-  // 替换危险CQ码
   result = result.replace(CQ_CODE_REGEX, (match, type) => {
     if (DANGEROUS_CQ_TYPES.has(type)) {
       return `[已过滤的${TYPE_LABELS[type] || type}]`;
@@ -51,7 +44,6 @@ export function sanitizeUserInput (instruction: string): string {
     return match;
   });
 
-  // 替换危险OneBot JSON消息段
   result = result.replace(ONEBOT_SEGMENT_REGEX, (match, type) => {
     if (DANGEROUS_CQ_TYPES.has(type)) {
       return `[已过滤的${TYPE_LABELS[type] || type}]`;
@@ -62,7 +54,6 @@ export function sanitizeUserInput (instruction: string): string {
   return result;
 }
 
-// 类型名称映射
 const TYPE_LABELS: Record<string, string> = {
   image: '图片', record: '语音', video: '视频', flash: '闪照',
 };
@@ -80,7 +71,6 @@ export function sanitizeReplyText (text: string): string {
   });
 }
 
-// ===== API输出侧检测：拦截AI通过call_api发送的危险媒体内容 =====
 
 /**
  * 检查消息段数组/字符串中是否包含危险媒体类型
