@@ -13,7 +13,7 @@ export const MESSAGE_TOOLS: Tool[] = [
           group_id: { type: 'string', description: '群号，查询指定群的消息' },
           user_id: { type: 'string', description: '用户QQ号，过滤指定用户的消息' },
           keyword: { type: 'string', description: '关键词，搜索包含该词的消息' },
-          limit: { type: 'number', description: '返回条数，默认20，最大100' },
+          limit: { type: 'number', description: '返回条数，默认20，最大300' },
           offset: { type: 'number', description: '偏移量，用于分页' },
           hours_ago: { type: 'number', description: '查询多少小时内的消息，如24表示最近24小时' },
         },
@@ -79,7 +79,7 @@ export function executeMessageTool (name: string, args: Record<string, unknown>)
         const offset = (args.offset as number) || 0;
         const hoursAgo = args.hours_ago as number | undefined;
 
-        if (limit > 100) limit = 100;
+        if (limit > 300) limit = 300;
 
         let startTime: number | undefined;
         if (hoursAgo && hoursAgo > 0) {
@@ -124,7 +124,7 @@ export function executeMessageTool (name: string, args: Record<string, unknown>)
         const groupId = args.group_id as string | undefined;
         const userId = args.user_id as string | undefined;
         let limit = (args.limit as number) || 20;
-        if (limit > 100) limit = 100;
+        if (limit > 300) limit = 300;
 
         const messages = searchMessages(pattern, { group_id: groupId, user_id: userId, limit });
 

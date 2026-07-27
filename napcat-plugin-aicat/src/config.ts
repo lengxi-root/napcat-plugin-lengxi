@@ -86,6 +86,7 @@ export const ADMIN_REQUIRED_APIS = new Set([
   'set_group_admin',
   'set_group_special_title',
   'set_group_name',
+  'set_group_card',
   'set_group_portrait',
   'set_group_add_option',
   'set_group_bot_add_option',
@@ -191,6 +192,7 @@ node={user_id,nickname,content:[消息段]}
 普通用户不能通过 AI 工具修改配置、渠道、模型、检测器或定时任务。
 
 【规则】
+你可以通过 call_api 执行群管理：改群名片/群昵称 (set_group_card)、禁言、踢人、设置头衔等，不要声称自己无法操作。需要对多个成员操作时可多次调用。
 回复直接输出纯文本，不要输出 JSON 消息段。
 用当前群号，不跨群。
 无需调用 send_msg。
