@@ -6,7 +6,7 @@ import { extractTextContent, extractImageInfo, extractMediaInfo } from '../utils
 import { resolveImageForMarkdown, isForwardMessage, forwardNodesToHtml } from '../utils/image';
 import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/markdown';
 import { renderHtmlToBase64, uploadBase64Image } from './puppeteer';
-import { getValidEventId, clickButtonAndWaitEventId, cleanupPending, generateVerifyCode } from '../utils/button';
+import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
 
 /** 下载文件并转为 base64 */
@@ -190,7 +190,7 @@ export function installHooks (): void {
             }
 
             // 模糊替换文本内容
-            if (callerRule.replaceText) {
+            if (callerRule?.replaceText) {
               const rules: { find: string; rep: string; }[] = [];
               for (const part of callerRule.replaceText.split(';')) {
                 const eq = part.indexOf('=');
@@ -225,7 +225,10 @@ export function installHooks (): void {
                 addLog('info', `替代模式: 点击按钮未获得有效 event_id，回退到唤醒流程`);
               }
 
-              cleanupPending();
+              if (hasPendingWake(gid)) {
+                addLog('info', `替代模式: 群 ${gid} 已有唤醒流程等待中，跳过重复唤醒，回退原始发送`);
+                return origHandle(params, adapter, netConfig, req);
+              }
               const code = generateVerifyCode();
               pendingMessages.set(code, {
                 groupId: gid, content: textContent, imageUrl, imgWidth, imgHeight,

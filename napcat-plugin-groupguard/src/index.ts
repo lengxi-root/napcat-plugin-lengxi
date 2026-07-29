@@ -186,6 +186,9 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
   const selfId = String((event as any).self_id || '');
   const messageSegments = (event as any).message || [];
 
+  // 跳过机器人自身发送的消息，避免与其他插件（如消息代发）形成消息循环
+  if (userId && (userId === selfId || userId === pluginState.botId)) return;
+
   // 白名单用户跳过所有检查（除了指令）
   const isWhite = pluginState.isWhitelisted(userId);
 

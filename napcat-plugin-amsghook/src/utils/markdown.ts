@@ -15,6 +15,19 @@ export const CALLBACK_KEYBOARD = {
   },
 };
 
+const EVENT_ID_MAX_USES = 5; // 官方被动消息同一 event_id 最多回复 5 次
+
+/** 代发成功后累计 event_id 使用次数，达上限则提前淘汰，下次点击按钮换新的 */
+function recordEventIdUse (groupId: string, eventId: string): void {
+  const info = groupEventIdCache.get(groupId);
+  if (!info || info.eventId !== eventId) return;
+  info.useCount = (info.useCount || 0) + 1;
+  if (info.useCount >= EVENT_ID_MAX_USES) {
+    groupEventIdCache.delete(groupId);
+    addLog('info', `event_id 已用满 ${EVENT_ID_MAX_USES} 次，提前淘汰: 群=${groupId}`);
+  }
+}
+
 async function downloadToBase64 (url: string): Promise<string | null> {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
@@ -51,14 +64,16 @@ export async function sendContentViaOfficialBot (
     }
     if (result && !result.code) {
       addLog('info', `官方机器人代发成功: 群=${groupId}(${groupOpenId}), eventId=${eventId}`);
+      recordEventIdUse(groupId, eventId);
       return true;
     } else {
       addLog('info', `官方机器人代发失败: 群=${groupId}, resp=${JSON.stringify(result)}`);
-      if (result?.code) groupEventIdCache.delete(groupId);
+      groupEventIdCache.delete(groupId);
       return false;
     }
   } catch (e: any) {
     addLog('info', `官方机器人代发异常: ${e.message}`);
+    groupEventIdCache.delete(groupId);
     return false;
   }
 }
@@ -82,14 +97,16 @@ export async function sendMediaViaOfficialBot (
     const result = await state.qqbotBridge.sendGroupMediaMsg(groupOpenId, fileInfo, content, { event_id: eventId });
     if (result && !result.code) {
       addLog('info', `官方机器人媒体代发成功: 群=${groupId}(${groupOpenId}), type=${fileType}`);
+      recordEventIdUse(groupId, eventId);
       return true;
     } else {
       addLog('info', `官方机器人媒体代发失败: 群=${groupId}, resp=${JSON.stringify(result)}`);
-      if (result?.code) groupEventIdCache.delete(groupId);
+      groupEventIdCache.delete(groupId);
       return false;
     }
   } catch (e: any) {
     addLog('info', `官方机器人媒体代发异常: ${e.message}`);
+    groupEventIdCache.delete(groupId);
     return false;
   }
 }

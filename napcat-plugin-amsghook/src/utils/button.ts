@@ -26,6 +26,15 @@ export function cleanupPending (): void {
   }
 }
 
+/** 判断某群是否已有未完成的唤醒流程（避免重复发送 @官方机器人 验证码刷屏） */
+export function hasPendingWake (groupId: string): boolean {
+  cleanupPending();
+  for (const pm of pendingMessages.values()) {
+    if (pm.groupId === groupId) return true;
+  }
+  return false;
+}
+
 /** 从 pb 数据中提取按钮信息 */
 export function extractButtonInfo (data: any): { buttonId: string; callbackData: string; } | null {
   if (!data || typeof data !== 'object') return null;
