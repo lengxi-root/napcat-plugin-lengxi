@@ -10,7 +10,6 @@ import WebSocket from 'ws';
 const OpCode = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RESUME: 6, RECONNECT: 7, HELLO: 10, HEARTBEAT_ACK: 11 } as const;
 const TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const API_BASE = 'https://api.sgroup.qq.com';
-const SANDBOX_API = 'https://sandbox.api.sgroup.qq.com';
 const GATEWAY_PATH = '/gateway/bot';
 const MAX_RETRY = 10;
 
@@ -18,7 +17,6 @@ export interface QQBotConfig {
   appid: string;
   secret: string;
   intents: string[];
-  sandbox?: boolean;
   maxRetry?: number;
   timeout?: number;
 }
@@ -68,7 +66,7 @@ export class QQBotBridge {
     this.config = config;
     this.onMessage = onMessage;
     this.log = log;
-    this.apiBase = config.sandbox ? SANDBOX_API : API_BASE;
+    this.apiBase = API_BASE;
   }
 
   // ========== HTTP 工具 ==========
@@ -307,19 +305,16 @@ export class QQBotBridge {
   }
 
   /**
-   * 发送 markdown 模板 + 键盘按钮消息（群聊）
+   * 发送原生 markdown + 自定义键盘按钮消息（群聊）
    * msg_type: 2 = markdown
    */
-  async sendGroupMarkdownMsg (groupId: string, markdownTemplateId: string, params: { key: string; values: string[]; }[], keyboardTemplateId?: string, source?: { id?: string; event_id?: string; }): Promise<any> {
+  async sendGroupMarkdownMsg (groupId: string, content: string, keyboard?: any, source?: { id?: string; event_id?: string; }): Promise<any> {
     const body: any = {
       msg_type: 2,
       msg_seq: Math.floor(Math.random() * 1000000),
-      markdown: {
-        custom_template_id: markdownTemplateId,
-        params: params.length > 0 ? params : [{ key: 'text', values: ['1'] }],
-      },
+      markdown: { content: content || '1' },
     };
-    if (keyboardTemplateId) body.keyboard = { id: keyboardTemplateId };
+    if (keyboard) body.keyboard = keyboard;
     // 被动消息回复：优先用 msg_id（普通消息），event_id 仅用于事件回调
     if (source?.id) body.msg_id = source.id;
     else if (source?.event_id) body.event_id = source.event_id;
@@ -335,18 +330,15 @@ export class QQBotBridge {
   }
 
   /**
-   * 发送 markdown 模板 + 键盘按钮消息（私聊）
+   * 发送原生 markdown + 自定义键盘按钮消息（私聊）
    */
-  async sendPrivateMarkdownMsg (userId: string, markdownTemplateId: string, params: { key: string; values: string[]; }[], keyboardTemplateId?: string, source?: { id?: string; event_id?: string; }): Promise<any> {
+  async sendPrivateMarkdownMsg (userId: string, content: string, keyboard?: any, source?: { id?: string; event_id?: string; }): Promise<any> {
     const body: any = {
       msg_type: 2,
       msg_seq: Math.floor(Math.random() * 1000000),
-      markdown: {
-        custom_template_id: markdownTemplateId,
-        params: params.length > 0 ? params : [{ key: 'text', values: ['1'] }],
-      },
+      markdown: { content: content || '1' },
     };
-    if (keyboardTemplateId) body.keyboard = { id: keyboardTemplateId };
+    if (keyboard) body.keyboard = keyboard;
     if (source?.id) body.msg_id = source.id;
     else if (source?.event_id) body.event_id = source.event_id;
     try {
@@ -366,9 +358,11 @@ export class QQBotBridge {
    * file_type: 1=图片, 2=视频, 3=语音
    * 返回 file_info 字符串（用于后续发送）
    */
-  async uploadGroupMedia (groupId: string, fileBase64: string, fileType: number): Promise<string | null> {
+  async uploadGroupMedia (groupId: string, fileData: string, fileType: number, isUrl = false): Promise<string | null> {
     try {
-      const body = { srv_send_msg: false, file_type: fileType, file_data: fileBase64 };
+      const body: any = { srv_send_msg: false, file_type: fileType };
+      if (isUrl) body.url = fileData;
+      else body.file_data = fileData;
       const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/files`, body, this.authHeaders());
       const fileInfo = result?.file_info;
       if (fileInfo) {

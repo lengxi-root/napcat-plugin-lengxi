@@ -18,11 +18,7 @@ export interface QQBotPluginConfig {
   appid: string;
   secret: string;
   intents: string[];
-  sandbox: boolean;
   qqNumber: string;
-  imgMarkdownTemplateId: string;
-  textMarkdownTemplateId: string;
-  keyboardTemplateId: string;
   forceImageRehost: boolean;
   masterQQ: string;
 }
@@ -86,8 +82,6 @@ export interface GroupEventIdInfo {
 export interface PendingContentInfo {
   content: string;
   imageUrl?: string | null;
-  imgWidth?: number;
-  imgHeight?: number;
   timestamp: number;
 }
 

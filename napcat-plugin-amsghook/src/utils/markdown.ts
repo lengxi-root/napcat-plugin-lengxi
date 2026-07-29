@@ -1,115 +1,54 @@
-// Markdown 文本拆分 + 通过官方机器人发送
+// 原生 markdown / 富媒体 通过官方机器人发送
 import { state, groupEventIdCache } from '../core/state';
 import { addLog } from '../core/logger';
 
-const MD_PATTERNS = [
-  /(!?\[.*?\])(\s*\(.*?\))/g,
-  /(\[.*?\])(\[.*?\])/g,
-  /(\*)([^*]+?\*)/g,
-  /(`)([^`]+?`)/g,
-  /(_)([^_]*?_)/g,
-];
-const LINK_PATTERN = /\[([^\]]*)\]\(([^)]*)\)/;
-const MD_LINK_BREAKER = '](mqqapi://aio/inlinecmd?command=lengximsghook&enter=false&reply=false)';
+/** 唤醒流程用的回调按钮键盘（原生构建，无需模板 ID） */
+export const CALLBACK_KEYBOARD = {
+  content: {
+    rows: [{
+      buttons: [{
+        id: '1',
+        render_data: { label: '回调', visited_label: '回调', style: 0 },
+        action: { type: 1, permission: { type: 2 }, data: '回调', unsupport_tips: '不支持该操作' },
+      }],
+    }],
+  },
+};
 
-export function splitMarkdownText (text: string): string[] {
-  text = text.replace(/\n/g, '\r');
-  const delimiter = '\x00SPLIT\x00';
-  for (const pattern of MD_PATTERNS) {
-    pattern.lastIndex = 0;
-    text = text.replace(pattern, `$1${delimiter}$2`);
+async function downloadToBase64 (url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    const buf = await res.arrayBuffer();
+    return Buffer.from(buf).toString('base64');
+  } catch (e: any) {
+    addLog('info', `下载图片失败: ${e.message}`);
+    return null;
   }
-  let parts = text.includes(delimiter) ? text.split(delimiter) : [text];
-  const finalParts: string[] = [];
-  for (const part of parts) {
-    finalParts.push(...splitBracketLinks(part));
-  }
-  return mergeSplitParts(finalParts);
-}
-
-export function splitSingleParamValues (text: string): string[] {
-  const parts = splitMarkdownText(text);
-  if (parts.length <= 1) return parts;
-  const prefixed = MD_LINK_BREAKER + text;
-  return splitMarkdownText(prefixed);
-}
-
-function splitBracketLinks (text: string): string[] {
-  const parts: string[] = [];
-  let current = '';
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === '[') {
-      const match = text.slice(i).match(/^\[([^\]]*)\]\(([^)]*)\)/);
-      if (match) {
-        current += '[' + match[1];
-        if (current) parts.push(current);
-        current = '](' + match[2] + ')';
-        i += match[0].length;
-      } else {
-        current += text[i];
-        i++;
-      }
-    } else {
-      current += text[i];
-      i++;
-    }
-  }
-  if (current) parts.push(current);
-  return parts.length ? parts : [text];
-}
-
-function mergeSplitParts (parts: string[]): string[] {
-  if (parts.length <= 1) return parts;
-  const merged: string[] = [];
-  let current = parts[0];
-  for (let i = 1; i < parts.length; i++) {
-    const test = current + parts[i];
-    if (LINK_PATTERN.test(test)) {
-      merged.push(current);
-      current = parts[i];
-    } else {
-      current = test;
-    }
-  }
-  if (current) merged.push(current);
-  return merged;
 }
 
 export async function sendContentViaOfficialBot (
   groupId: string, groupOpenId: string, eventId: string,
-  content: string, imageUrl?: string | null, imgWidth?: number, imgHeight?: number,
+  content: string, imageUrl?: string | null,
 ): Promise<boolean> {
   if (!state.qqbotBridge) return false;
-  const qcfg = state.config.qqbot;
-  let tplId: string;
-  let params: { key: string; values: string[]; }[];
-
-  if (imageUrl && qcfg?.imgMarkdownTemplateId) {
-    const w = imgWidth || 100;
-    const h = imgHeight || 100;
-    tplId = qcfg.imgMarkdownTemplateId;
-    params = [
-      { key: 'px', values: [`#${w}px #${h}px`] },
-      { key: 'url', values: [imageUrl] },
-    ];
-    if (content) {
-      const splitValues = splitSingleParamValues('\r' + content);
-      params.push({ key: 'text', values: splitValues });
-    }
-  } else if (qcfg?.textMarkdownTemplateId) {
-    tplId = qcfg.textMarkdownTemplateId;
-    const splitValues = splitSingleParamValues(content || '1');
-    params = [{ key: 'text', values: splitValues }];
-  } else {
-    addLog('info', '未配置 markdown 模板 ID');
-    return false;
-  }
 
   try {
-    const result = await state.qqbotBridge.sendGroupMarkdownMsg(
-      groupOpenId, tplId, params, undefined, { event_id: eventId },
-    );
+    let result: any;
+    if (imageUrl) {
+      // 图片走富媒体：URL 直传，失败则下载后 base64 上传
+      let fileInfo = await state.qqbotBridge.uploadGroupMedia(groupOpenId, imageUrl, 1, true);
+      if (!fileInfo) {
+        const base64 = await downloadToBase64(imageUrl);
+        if (base64) fileInfo = await state.qqbotBridge.uploadGroupMedia(groupOpenId, base64, 1);
+      }
+      if (!fileInfo) {
+        addLog('info', `官方机器人图片上传失败: 群=${groupId}, url=${imageUrl}`);
+        return false;
+      }
+      result = await state.qqbotBridge.sendGroupMediaMsg(groupOpenId, fileInfo, content, { event_id: eventId });
+    } else {
+      result = await state.qqbotBridge.sendGroupMarkdownMsg(groupOpenId, content, undefined, { event_id: eventId });
+    }
     if (result && !result.code) {
       addLog('info', `官方机器人代发成功: 群=${groupId}(${groupOpenId}), eventId=${eventId}`);
       return true;
