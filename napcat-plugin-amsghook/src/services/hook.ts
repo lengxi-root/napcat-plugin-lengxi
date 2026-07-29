@@ -8,6 +8,7 @@ import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/mar
 import { renderHtmlToBase64, uploadBase64Image } from './puppeteer';
 import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, cleanupPending, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
+import { isOfficialBotInGroup } from '../utils/group-check';
 
 /** 下载文件并转为 base64 */
 async function downloadToBase64 (url: string): Promise<string | null> {
@@ -102,7 +103,7 @@ export function installHooks (): void {
 
         if ((callerRule?.replace || state.config.globalReplace) && qcfg?.appid && qcfg.secret && qcfg.qqNumber && state.qqbotBridge?.isConnected()) {
           const groupId = params.group_id || (actionName === 'send_msg' && params.message_type === 'group' ? params.group_id : null);
-          if (groupId && caller !== 'napcat-plugin-amsghook') {
+          if (groupId && caller !== 'napcat-plugin-amsghook' && await isOfficialBotInGroup(String(groupId), adapter, netConfig)) {
             const gid = String(groupId);
 
             let textContent = '';
