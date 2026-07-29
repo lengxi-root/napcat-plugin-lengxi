@@ -6,7 +6,7 @@ import { getMessagePb, jsonDumpsWithBytes } from './protobuf';
 import { state, DEFAULT_CONFIG, originalHandles, pendingMessages, pendingPbExtracts, groupButtonMap, PENDING_TIMEOUT } from './core/state';
 import { addLog } from './core/logger';
 import { loadConfigFromFile, saveConfig } from './core/config';
-import { loadButtonMap, saveButtonMap, extractButtonInfo, clickButton, getValidEventId, clickButtonAndWaitEventId, cleanupPending, generateVerifyCode } from './utils/button';
+import { loadButtonMap, saveButtonMap, extractButtonInfo, clickButton, getValidEventId, clickButtonAndWaitEventId, hasPendingWake, generateVerifyCode } from './utils/button';
 import { sendContentViaOfficialBot } from './utils/markdown';
 import { probePuppeteer } from './services/puppeteer';
 import { registerApiRoutes } from './services/api';
@@ -163,7 +163,10 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
       }
     }
     if (qcfg.qqNumber) {
-      cleanupPending();
+      if (hasPendingWake(gid)) {
+        addLog('info', `dm 指令: 群 ${gid} 已有唤醒流程等待中，跳过重复唤醒`);
+        return;
+      }
       const code = generateVerifyCode();
       pendingMessages.set(code, { groupId: gid, content: dmText, rawMessage: null, code, timestamp: Date.now(), caller: null });
       const atMsg = [{ type: 'at', data: { qq: qcfg.qqNumber } }, { type: 'text', data: { text: ' ' + code } }];
