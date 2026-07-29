@@ -1,7 +1,7 @@
 // 按钮相关：提取、点击、持久化、验证码、event_id 缓存
 import fs from 'fs';
 import path from 'path';
-import { state, pendingMessages, PENDING_TIMEOUT, groupButtonMap, groupEventIdCache, EVENT_ID_TTL, eventIdWaiters } from '../core/state';
+import { state, pendingMessages, PENDING_TIMEOUT, groupButtonMap, groupEventIdCache, EVENT_ID_TTL, eventIdWaiters, originalHandles } from '../core/state';
 import type { GroupButtonInfo, GroupEventIdInfo } from '../core/types';
 import { addLog } from '../core/logger';
 
@@ -22,7 +22,18 @@ export function generateVerifyCode (): string {
 export function cleanupPending (): void {
   const now = Date.now();
   for (const [key, pm] of pendingMessages) {
-    if (now - pm.timestamp > PENDING_TIMEOUT) pendingMessages.delete(key);
+    if (now - pm.timestamp > PENDING_TIMEOUT) {
+      pendingMessages.delete(key);
+      // 唤醒超时（官方机器人未响应验证码）：回退原始发送，避免消息丢失
+      if (pm.fallback) {
+        const orig = originalHandles.get(pm.fallback.actionName);
+        if (orig) {
+          addLog('info', `唤醒超时: 验证码=${pm.code}, 群=${pm.groupId}, 回退原始发送`);
+          Promise.resolve(orig(pm.fallback.params, pm.fallback.adapter, pm.fallback.netConfig, undefined))
+            .catch((e: any) => addLog('info', `唤醒超时回退发送失败: ${e.message}`));
+        }
+      }
+    }
   }
 }
 

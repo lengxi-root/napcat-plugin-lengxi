@@ -57,6 +57,13 @@ export interface PendingMessage {
   code: string;
   timestamp: number;
   caller: string | null;
+  /** 唤醒超时后用于回退原始发送的现场信息 */
+  fallback?: {
+    actionName: string;
+    params: any;
+    adapter: string;
+    netConfig: any;
+  };
 }
 
 export interface PendingPbExtract {
