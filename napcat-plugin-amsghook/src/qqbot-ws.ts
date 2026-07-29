@@ -184,13 +184,14 @@ export class QQBotBridge {
     this.ws.on('message', (raw) => this.onWsMessage(raw));
   }
 
-  /** 断线无限重连（递增退避封顶 30s）；官方网关约每半小时主动断开，需客户端自行重连 */
+  /** 官方网关会周期性主动断开，断开后立即重连；仅连续失败时递增退避（封顶 30s） */
   private onClose (code: number): void {
     this.alive = false;
     if (this.heartbeatTimer) { clearTimeout(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.closed) return;
     this.retry++;
-    this.log('info', `QQBot WS 断开(${code}), 重连 #${this.retry}`);
+    const delay = this.retry <= 1 ? 0 : Math.min((this.retry - 1) * 2000, 30000);
+    this.log('info', `QQBot WS 断开(${code}), ${delay === 0 ? '立即' : `${delay / 1000}s 后`}重连 #${this.retry}`);
     setTimeout(async () => {
       if (this.closed) return;
       try {
@@ -201,7 +202,7 @@ export class QQBotBridge {
         this.log('info', `QQBot WS 重连准备失败: ${e.message}`);
         this.onClose(code);
       }
-    }, Math.min(this.retry * 2000, 30000));
+    }, delay);
   }
 
   private sendWs (data: any): void {
