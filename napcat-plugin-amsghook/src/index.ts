@@ -161,6 +161,9 @@ const plugin_onmessage: PluginModule['plugin_onmessage'] = async (ctx: NapCatPlu
         const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, dmText);
         if (sent) return;
       }
+      // 已有按钮 id 的群无需唤醒流程
+      addLog('info', `dm 指令: 群 ${gid} 已有按钮映射但发送失败，跳过唤醒`);
+      return;
     }
     if (qcfg.qqNumber) {
       if (hasPendingWake(gid)) {

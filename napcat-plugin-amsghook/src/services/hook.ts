@@ -8,6 +8,7 @@ import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/mar
 import { renderHtmlToBase64, uploadBase64Image } from './puppeteer';
 import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, cleanupPending, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
+import { isOfficialBotInGroup } from '../utils/group-check';
 
 /** 下载文件并转为 base64 */
 async function downloadToBase64 (url: string): Promise<string | null> {
@@ -102,7 +103,7 @@ export function installHooks (): void {
 
         if ((callerRule?.replace || state.config.globalReplace) && qcfg?.appid && qcfg.secret && qcfg.qqNumber && state.qqbotBridge?.isConnected()) {
           const groupId = params.group_id || (actionName === 'send_msg' && params.message_type === 'group' ? params.group_id : null);
-          if (groupId && caller !== 'napcat-plugin-amsghook') {
+          if (groupId && caller !== 'napcat-plugin-amsghook' && await isOfficialBotInGroup(String(groupId), adapter, netConfig)) {
             const gid = String(groupId);
 
             let textContent = '';
@@ -222,7 +223,9 @@ export function installHooks (): void {
                   const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl);
                   if (sent) return { message_id: -1 };
                 }
-                addLog('info', `替代模式: 点击按钮未获得有效 event_id，回退到唤醒流程`);
+                // 已有按钮 id 的群无需唤醒流程，点击失败直接回退原始发送
+                addLog('info', `替代模式: 点击按钮未获得有效 event_id，群 ${gid} 已有按钮映射，跳过唤醒回退原始发送`);
+                return origHandle(params, adapter, netConfig, req);
               }
 
               if (hasPendingWake(gid)) {
