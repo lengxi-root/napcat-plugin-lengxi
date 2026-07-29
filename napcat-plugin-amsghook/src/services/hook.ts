@@ -1,12 +1,12 @@
 // _handle hook 逻辑：拦截发送消息
-import { state, ONEBOT_RULE_NAME, originalHandles, pendingMessages, groupButtonMap } from '../core/state';
+import { state, ONEBOT_RULE_NAME, originalHandles, pendingMessages, groupButtonMap, PENDING_TIMEOUT } from '../core/state';
 import { addLog } from '../core/logger';
 import { getCallerPlugin, getSuffix, transformParams, applyReplaceText } from '../utils/transform';
 import { extractTextContent, extractImageInfo, extractMediaInfo } from '../utils/message';
 import { resolveImageForMarkdown, isForwardMessage, forwardNodesToHtml } from '../utils/image';
 import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/markdown';
 import { renderHtmlToBase64, uploadBase64Image } from './puppeteer';
-import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, generateVerifyCode } from '../utils/button';
+import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, cleanupPending, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
 
 /** 下载文件并转为 base64 */
@@ -233,7 +233,10 @@ export function installHooks (): void {
               pendingMessages.set(code, {
                 groupId: gid, content: textContent, imageUrl, imgWidth, imgHeight,
                 rawMessage: params.message || params.messages, code, timestamp: Date.now(), caller,
+                fallback: { actionName, params, adapter, netConfig },
               });
+              // 到期主动检查：官方机器人未响应时回退原始发送
+              setTimeout(() => cleanupPending(), PENDING_TIMEOUT + 1000);
               addLog('info', `替代模式: 唤醒流程, 验证码=${code}, 群=${gid}`);
               const atMsg = [
                 { type: 'at', data: { qq: qcfg.qqNumber } },

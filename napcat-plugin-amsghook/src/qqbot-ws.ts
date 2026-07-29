@@ -54,6 +54,7 @@ export class QQBotBridge {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private retry = 0;
   private alive = false;
+  private lastAck = 0;
   private closed = false;
   private onMessage: MsgHandler;
   private log: LogFn;
@@ -193,6 +194,7 @@ export class QQBotBridge {
       if (msg.s) this.seq = msg.s;
       this.retry = 0;
       this.alive = true;
+      this.lastAck = Date.now();
       this.log('info', `QQBot WS 鉴权通过, session=${session_id}`);
       this.sendHeartbeat();
       return;
@@ -201,6 +203,7 @@ export class QQBotBridge {
     // 心跳 ACK
     if (msg.op === OpCode.HEARTBEAT_ACK || msg.t === 'RESUMED') {
       this.alive = true;
+      this.lastAck = Date.now();
       this.scheduleHeartbeat();
       return;
     }
@@ -220,6 +223,13 @@ export class QQBotBridge {
   }
 
   private sendHeartbeat (): void {
+    // 心跳看门狗：长时间收不到 ACK 说明连接已假死，强制断开触发重连
+    if (this.lastAck && this.heartbeatInterval && Date.now() - this.lastAck > this.heartbeatInterval * 3) {
+      this.log('info', 'QQBot WS 心跳 ACK 超时，判定连接失效，强制重连');
+      this.alive = false;
+      try { this.ws?.terminate(); } catch { /* ignore */ }
+      return;
+    }
     this.sendWs({ op: OpCode.HEARTBEAT, d: this.seq || null });
     this.scheduleHeartbeat();
   }
