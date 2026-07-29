@@ -223,7 +223,9 @@ export function installHooks (): void {
                   const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl);
                   if (sent) return { message_id: -1 };
                 }
-                addLog('info', `替代模式: 点击按钮未获得有效 event_id，回退到唤醒流程`);
+                // 已有按钮 id 的群无需唤醒流程，点击失败直接回退原始发送
+                addLog('info', `替代模式: 点击按钮未获得有效 event_id，群 ${gid} 已有按钮映射，跳过唤醒回退原始发送`);
+                return origHandle(params, adapter, netConfig, req);
               }
 
               if (hasPendingWake(gid)) {

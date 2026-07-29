@@ -7,11 +7,12 @@
 import WebSocket from 'ws';
 
 // ========== 常量 ==========
-const OpCode = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RESUME: 6, RECONNECT: 7, HELLO: 10, HEARTBEAT_ACK: 11 } as const;
+const OpCode = { DISPATCH: 0, HEARTBEAT: 1, IDENTIFY: 2, RESUME: 6, RECONNECT: 7, INVALID_SESSION: 9, HELLO: 10, HEARTBEAT_ACK: 11 } as const;
 const TOKEN_URL = 'https://bots.qq.com/app/getAppAccessToken';
 const API_BASE = 'https://api.sgroup.qq.com';
 const GATEWAY_PATH = '/gateway/bot';
-const MAX_RETRY = 10;
+const TOKEN_REFRESH_BUFFER = 60000; // token 剩余 60s 内刷新
+const TOKEN_RETRY_DELAY = 30000;
 
 export interface QQBotConfig {
   appid: string;
@@ -46,6 +47,8 @@ const IntentValues: Record<string, number> = {
 export class QQBotBridge {
   private config: QQBotConfig;
   private accessToken = '';
+  private tokenExpiresAt = 0;
+  private tokenRefreshing: Promise<void> | null = null;
   private wsUrl = '';
   private ws: WebSocket | null = null;
   private sessionId = '';
@@ -85,34 +88,61 @@ export class QQBotBridge {
     return res.json();
   }
 
-  private authHeaders (): Record<string, string> {
-    return { Authorization: `QQBot ${this.accessToken}`, 'X-Union-Appid': this.config.appid };
+  private async authHeaders (): Promise<Record<string, string>> {
+    const token = await this.getToken();
+    return { Authorization: `QQBot ${token}`, 'X-Union-Appid': this.config.appid };
   }
 
   // ========== Token ==========
+  private isTokenValid (): boolean {
+    return !!this.accessToken && Date.now() < this.tokenExpiresAt - TOKEN_REFRESH_BUFFER;
+  }
+
+  /** 获取当前有效 token，剩余不足 60s 时自动刷新（并发共享同一次刷新） */
+  private async getToken (): Promise<string> {
+    if (this.isTokenValid()) return this.accessToken;
+    if (!this.tokenRefreshing) {
+      this.tokenRefreshing = this.refreshToken().finally(() => { this.tokenRefreshing = null; });
+    }
+    await this.tokenRefreshing;
+    return this.accessToken;
+  }
+
   private async refreshToken (): Promise<void> {
     try {
       const data = await this.httpPost(TOKEN_URL, { appId: this.config.appid, clientSecret: this.config.secret });
+      if (!data?.access_token) throw new Error(JSON.stringify(data));
       this.accessToken = data.access_token;
-      const expiresIn = (data.expires_in || 7200) - 60; // 提前 60s 刷新
-      this.log('info', `QQBot token 获取成功, ${expiresIn}s 后刷新`);
-      this.tokenTimer = setTimeout(() => this.refreshToken().catch(() => { }), expiresIn * 1000);
+      const expiresIn = Number(data.expires_in || 7200);
+      this.tokenExpiresAt = Date.now() + expiresIn * 1000;
+      this.log('info', `QQBot token 获取成功, 有效期 ${expiresIn}s`);
+      this.scheduleTokenRefresh((expiresIn - 60) * 1000);
     } catch (e: any) {
-      this.log('info', `QQBot token 获取失败: ${e.message}`);
+      this.log('info', `QQBot token 获取失败: ${e.message}, ${TOKEN_RETRY_DELAY / 1000}s 后重试`);
+      this.scheduleTokenRefresh(TOKEN_RETRY_DELAY);
       throw e;
     }
   }
 
+  /** 后台自动续期：到期前 60s 刷新，失败后 30s 重试，保证循环不中断 */
+  private scheduleTokenRefresh (delay: number): void {
+    if (this.closed) return;
+    if (this.tokenTimer) clearTimeout(this.tokenTimer);
+    this.tokenTimer = setTimeout(() => {
+      this.refreshToken().catch(() => { /* 已在 refreshToken 内重新排期 */ });
+    }, Math.max(delay, 1000));
+  }
+
   // ========== Gateway ==========
   private async getGateway (): Promise<void> {
-    const data = await this.httpGet(`${this.apiBase}${GATEWAY_PATH}`, this.authHeaders());
+    const data = await this.httpGet(`${this.apiBase}${GATEWAY_PATH}`, await this.authHeaders());
     this.wsUrl = data.url;
     this.log('info', `QQBot gateway: ${this.wsUrl}`);
   }
 
   private async getBotInfo (): Promise<void> {
     try {
-      const data = await this.httpGet(`${this.apiBase}/users/@me`, this.authHeaders());
+      const data = await this.httpGet(`${this.apiBase}/users/@me`, await this.authHeaders());
       this.selfId = data.id;
       this.nickname = data.username;
       this.log('info', `QQBot 登录: ${this.nickname}(${this.selfId})`);
@@ -130,7 +160,7 @@ export class QQBotBridge {
   // ========== WebSocket ==========
   async start (): Promise<void> {
     this.closed = false;
-    await this.refreshToken();
+    await this.getToken();
     await this.getGateway();
     await this.getBotInfo();
     this.connect();
@@ -154,19 +184,24 @@ export class QQBotBridge {
     this.ws.on('message', (raw) => this.onWsMessage(raw));
   }
 
+  /** 断线无限重连（递增退避封顶 30s）；官方网关约每半小时主动断开，需客户端自行重连 */
   private onClose (code: number): void {
     this.alive = false;
     if (this.heartbeatTimer) { clearTimeout(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.closed) return;
-    if (this.retry < (this.config.maxRetry || MAX_RETRY)) {
-      this.retry++;
-      this.log('info', `QQBot WS 断开(${code}), 重连 #${this.retry}`);
-      setTimeout(() => {
-        this.refreshToken().then(() => this.getGateway()).then(() => this.connect()).catch(() => { });
-      }, Math.min(this.retry * 2000, 30000));
-    } else {
-      this.log('info', `QQBot WS 超过最大重试(${MAX_RETRY}), 停止`);
-    }
+    this.retry++;
+    this.log('info', `QQBot WS 断开(${code}), 重连 #${this.retry}`);
+    setTimeout(async () => {
+      if (this.closed) return;
+      try {
+        await this.getToken();
+        await this.getGateway();
+        this.connect();
+      } catch (e: any) {
+        this.log('info', `QQBot WS 重连准备失败: ${e.message}`);
+        this.onClose(code);
+      }
+    }, Math.min(this.retry * 2000, 30000));
   }
 
   private sendWs (data: any): void {
@@ -177,13 +212,20 @@ export class QQBotBridge {
     let msg: any;
     try { msg = JSON.parse(String(raw)); } catch { return; }
 
-    // HELLO → 鉴权
+    // HELLO → 鉴权 / 恢复会话
     if (msg.op === OpCode.HELLO && msg.d?.heartbeat_interval) {
       this.heartbeatInterval = msg.d.heartbeat_interval;
-      this.sendWs({
-        op: OpCode.IDENTIFY,
-        d: { token: `QQBot ${this.accessToken}`, intents: this.getIntentsBitmask(), shard: [0, 1] },
-      });
+      if (this.sessionId && this.seq) {
+        this.sendWs({
+          op: OpCode.RESUME,
+          d: { token: `QQBot ${this.accessToken}`, session_id: this.sessionId, seq: this.seq },
+        });
+      } else {
+        this.sendWs({
+          op: OpCode.IDENTIFY,
+          d: { token: `QQBot ${this.accessToken}`, intents: this.getIntentsBitmask(), shard: [0, 1] },
+        });
+      }
       return;
     }
 
@@ -200,8 +242,12 @@ export class QQBotBridge {
       return;
     }
 
-    // 心跳 ACK
+    // 心跳 ACK / 会话恢复成功
     if (msg.op === OpCode.HEARTBEAT_ACK || msg.t === 'RESUMED') {
+      if (msg.t === 'RESUMED') {
+        this.retry = 0;
+        this.log('info', `QQBot WS 会话恢复成功, seq=${this.seq}`);
+      }
       this.alive = true;
       this.lastAck = Date.now();
       this.scheduleHeartbeat();
@@ -211,6 +257,15 @@ export class QQBotBridge {
     // 重连通知
     if (msg.op === OpCode.RECONNECT) {
       this.log('info', 'QQBot 服务端要求重连');
+      this.ws?.close();
+      return;
+    }
+
+    // 会话无效 → 清除会话重新鉴权
+    if (msg.op === OpCode.INVALID_SESSION) {
+      this.log('info', 'QQBot WS 会话无效, 清除会话后重新鉴权');
+      this.sessionId = '';
+      this.seq = 0;
       this.ws?.close();
       return;
     }
@@ -291,7 +346,7 @@ export class QQBotBridge {
     if (source?.id) body.msg_id = source.id;
     else if (source?.event_id) body.event_id = source.event_id;
     try {
-      return await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, this.authHeaders());
+      return await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, await this.authHeaders());
     } catch (e: any) {
       this.log('info', `QQBot 发送群消息失败: ${e.message}`);
       return null;
@@ -307,7 +362,7 @@ export class QQBotBridge {
     if (source?.id) body.msg_id = source.id;
     else if (source?.event_id) body.event_id = source.event_id;
     try {
-      return await this.httpPost(`${this.apiBase}/v2/users/${userId}/messages`, body, this.authHeaders());
+      return await this.httpPost(`${this.apiBase}/v2/users/${userId}/messages`, body, await this.authHeaders());
     } catch (e: any) {
       this.log('info', `QQBot 发送私聊消息失败: ${e.message}`);
       return null;
@@ -330,7 +385,7 @@ export class QQBotBridge {
     else if (source?.event_id) body.event_id = source.event_id;
     try {
       this.log('info', `QQBot markdown 请求体: ${JSON.stringify(body)}`);
-      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, this.authHeaders());
+      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, await this.authHeaders());
       this.log('info', `QQBot markdown 响应: ${JSON.stringify(result)}`);
       return result;
     } catch (e: any) {
@@ -352,7 +407,7 @@ export class QQBotBridge {
     if (source?.id) body.msg_id = source.id;
     else if (source?.event_id) body.event_id = source.event_id;
     try {
-      const result = await this.httpPost(`${this.apiBase}/v2/users/${userId}/messages`, body, this.authHeaders());
+      const result = await this.httpPost(`${this.apiBase}/v2/users/${userId}/messages`, body, await this.authHeaders());
       this.log('info', `QQBot 发送 markdown 私聊消息成功: user=${userId}`);
       return result;
     } catch (e: any) {
@@ -373,7 +428,7 @@ export class QQBotBridge {
       const body: any = { srv_send_msg: false, file_type: fileType };
       if (isUrl) body.url = fileData;
       else body.file_data = fileData;
-      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/files`, body, this.authHeaders());
+      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/files`, body, await this.authHeaders());
       const fileInfo = result?.file_info;
       if (fileInfo) {
         this.log('info', `QQBot 上传媒体成功: type=${fileType}, group=${groupId}`);
@@ -402,7 +457,7 @@ export class QQBotBridge {
     else if (source?.event_id) body.event_id = source.event_id;
     try {
       this.log('info', `QQBot 富媒体消息请求: group=${groupId}, type=7`);
-      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, this.authHeaders());
+      const result = await this.httpPost(`${this.apiBase}/v2/groups/${groupId}/messages`, body, await this.authHeaders());
       this.log('info', `QQBot 富媒体消息响应: ${JSON.stringify(result)}`);
       return result;
     } catch (e: any) {

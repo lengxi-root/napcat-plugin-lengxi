@@ -6,7 +6,7 @@ interface BotInGroupCacheEntry { inGroup: boolean; timestamp: number; }
 
 export const botInGroupCache = new Map<string, BotInGroupCacheEntry>();
 export const BOT_IN_GROUP_TTL = 1800000; // 在群缓存 30 分钟
-export const BOT_NOT_IN_GROUP_TTL = 300000; // 不在群缓存 5 分钟
+export const BOT_NOT_IN_GROUP_TTL = 60000; // 不在群缓存 1 分钟
 
 /** 检查官方机器人是否在指定群内（结果缓存，不在群时短缓存以便入群后尽快生效） */
 export async function isOfficialBotInGroup (groupId: string, adapter: string, netConfig: any): Promise<boolean> {
