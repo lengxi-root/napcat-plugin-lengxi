@@ -77,6 +77,8 @@ export interface GroupEventIdInfo {
   eventId: string;
   groupOpenId: string;
   timestamp: number;
+  /** 已使用次数（官方被动消息同一 event_id 最多回复 5 次） */
+  useCount?: number;
 }
 
 export interface PendingContentInfo {
