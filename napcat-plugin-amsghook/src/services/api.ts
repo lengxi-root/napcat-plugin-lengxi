@@ -73,10 +73,7 @@ export function registerApiRoutes (router: any): void {
     state.config.qqbot = {
       appid: String(body.appid || ''), secret: String(body.secret || ''),
       intents: Array.isArray(body.intents) ? body.intents : ['GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'INTERACTION'],
-      sandbox: Boolean(body.sandbox), qqNumber: String(body.qqNumber || ''),
-      imgMarkdownTemplateId: String(body.imgMarkdownTemplateId || ''),
-      textMarkdownTemplateId: String(body.textMarkdownTemplateId || ''),
-      keyboardTemplateId: String(body.keyboardTemplateId || ''),
+      qqNumber: String(body.qqNumber || ''),
       forceImageRehost: Boolean(body.forceImageRehost),
       masterQQ: String(body.masterQQ || ''),
     };

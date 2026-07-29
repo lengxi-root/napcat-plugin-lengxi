@@ -209,7 +209,7 @@ export function installHooks (): void {
               const cached = getValidEventId(gid);
               if (cached) {
                 addLog('info', `替代模式: 使用缓存 event_id=${cached.eventId}, 群=${gid}`);
-                const sent = await sendContentViaOfficialBot(gid, cached.groupOpenId, cached.eventId, textContent, imageUrl, imgWidth, imgHeight);
+                const sent = await sendContentViaOfficialBot(gid, cached.groupOpenId, cached.eventId, textContent, imageUrl);
                 if (sent) return { message_id: -1 };
                 addLog('info', `替代模式: event_id 可能已过期，尝试重新点击按钮`);
               }
@@ -219,7 +219,7 @@ export function installHooks (): void {
                 addLog('info', `替代模式: 点击按钮获取新 event_id, 群=${gid}`);
                 const newEventId = await clickButtonAndWaitEventId(gid, btnInfo.buttonId, btnInfo.callbackData);
                 if (newEventId) {
-                  const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl, imgWidth, imgHeight);
+                  const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl);
                   if (sent) return { message_id: -1 };
                 }
                 addLog('info', `替代模式: 点击按钮未获得有效 event_id，回退到唤醒流程`);

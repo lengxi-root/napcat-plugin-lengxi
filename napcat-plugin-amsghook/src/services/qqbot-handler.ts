@@ -6,7 +6,7 @@ import {
   groupButtonMap, groupEventIdCache, eventIdWaiters, pendingContentAfterAwaken,
 } from '../core/state';
 import { addLog } from '../core/logger';
-import { sendContentViaOfficialBot } from '../utils/markdown';
+import { sendContentViaOfficialBot, CALLBACK_KEYBOARD } from '../utils/markdown';
 
 function onQQBotMessage (msg: QQBotMessage): void {
   if (!state.ctxRef) return;
@@ -38,7 +38,7 @@ function onQQBotMessage (msg: QQBotMessage): void {
         if (pendingContent && Date.now() - pendingContent.timestamp < PENDING_TIMEOUT) {
           pendingContentAfterAwaken.delete(qqGroupId);
           addLog('info', `唤醒流程完成，发送待发内容: 群=${qqGroupId}`);
-          sendContentViaOfficialBot(qqGroupId, groupOpenId, eventId, pendingContent.content, pendingContent.imageUrl, pendingContent.imgWidth, pendingContent.imgHeight).catch(() => { });
+          sendContentViaOfficialBot(qqGroupId, groupOpenId, eventId, pendingContent.content, pendingContent.imageUrl).catch(() => { });
         }
       } else {
         addLog('info', `INTERACTION 回调: 未找到 group_openid=${groupOpenId} 对应的 QQ 群号`);
@@ -56,12 +56,9 @@ function onQQBotMessage (msg: QQBotMessage): void {
       if (pending) {
         pendingMessages.delete(code);
         addLog('info', `验证码匹配成功: ${code} → 由官方机器人发送消息到群 ${msg.group_id}`);
-        const mdTplId = state.config.qqbot?.textMarkdownTemplateId || state.config.qqbot?.imgMarkdownTemplateId;
-        const kbTplId = state.config.qqbot?.keyboardTemplateId;
-        if (mdTplId && state.qqbotBridge) {
+        if (state.qqbotBridge) {
           state.qqbotBridge.sendGroupMarkdownMsg(
-            msg.group_id, mdTplId, [{ key: 'text', values: ['1'] }],
-            kbTplId || undefined,
+            msg.group_id, '1', CALLBACK_KEYBOARD,
             { id: msg.message_id, event_id: msg.event_id },
           ).then((result) => {
             if (result && !result.code) {
@@ -73,16 +70,13 @@ function onQQBotMessage (msg: QQBotMessage): void {
                 });
                 addLog('info', `已注册 pb 提取等待: 群=${pending.groupId}, openId=${msg.group_id}, 官方机器人QQ=${state.config.qqbot.qqNumber}`);
                 pendingContentAfterAwaken.set(pending.groupId, {
-                  content: pending.content, imageUrl: pending.imageUrl,
-                  imgWidth: pending.imgWidth, imgHeight: pending.imgHeight, timestamp: Date.now(),
+                  content: pending.content, imageUrl: pending.imageUrl, timestamp: Date.now(),
                 });
               }
             } else {
               addLog('info', `官方机器人 markdown 消息发送失败: group=${msg.group_id}, resp=${JSON.stringify(result)}`);
             }
           }).catch((e: any) => addLog('info', `官方机器人发送异常: ${e.message}`));
-        } else {
-          addLog('info', '未配置 markdown 模板 ID，无法发送');
         }
         return;
       } else {
@@ -121,7 +115,6 @@ export async function startQQBot (): Promise<void> {
   const botConfig: QQBotConfig = {
     appid: qcfg.appid, secret: qcfg.secret,
     intents: qcfg.intents || ['GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'INTERACTION'],
-    sandbox: qcfg.sandbox,
   };
   state.qqbotBridge = new QQBotBridge(botConfig, onQQBotMessage, addLog);
   try {

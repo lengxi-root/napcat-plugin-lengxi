@@ -11,8 +11,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   qqbot: {
     appid: '', secret: '',
     intents: ['GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'INTERACTION'],
-    sandbox: false, qqNumber: '',
-    imgMarkdownTemplateId: '', textMarkdownTemplateId: '', keyboardTemplateId: '',
+    qqNumber: '',
     forceImageRehost: false, masterQQ: '',
   },
   ownerQQ: '',

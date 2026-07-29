@@ -796,55 +796,11 @@
               </div>
             </div>
             <p class="text-xs text-slate-400 py-2 border-b border-blue-100/30 dark:border-blue-900/10">
-              勾选"代发"的插件，其群消息将由官方机器人通过 markdown 模板发送</p>
+              勾选"代发"的插件，其群消息将由官方机器人通过原生 markdown 发送，无需提审模板</p>
             <div class="flex items-center gap-6 py-3 border-b border-blue-100/30 dark:border-blue-900/10">
-              <div class="flex items-center gap-2"><span class="text-sm font-medium">沙箱模式</span>
-                <div class="tgl" id="qb-sandbox" onclick="tg(this)"></div>
-              </div>
               <div class="flex items-center gap-2"><span class="text-sm font-medium">图片转存</span>
                 <div class="tgl" id="qb-rehost" onclick="tg(this)"></div><span
                   class="text-[10px] text-slate-400">下载后通过QQ转存，防止开放平台无法访问</span>
-              </div>
-            </div>
-            <div class="py-3 border-b border-blue-100/30 dark:border-blue-900/10">
-              <div class="flex items-center gap-2 mb-2">
-                <span class="text-xs text-slate-500">模板内容复制</span>
-                <button onclick="cpTpl('{{.text}}')" class="btn btn-s"
-                  style="padding:3px 10px;font-size:10px;gap:4px"><svg width="10" height="10" viewBox="0 0 24 24"
-                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>{{.text}}</button>
-                <button onclick="cpTpl('![{{.px}}]({{.url}}){{.text}}')" class="btn btn-s"
-                  style="padding:3px 10px;font-size:10px;gap:4px"><svg width="10" height="10" viewBox="0 0 24 24"
-                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>![{{.px}}]({{.url}}){{.text}}</button>
-                <button onclick="cpKbTpl()" class="btn btn-s" style="padding:3px 10px;font-size:10px;gap:4px"><svg
-                    width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" />
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                  </svg>按钮模板 JSON</button>
-              </div>
-              <p class="text-[10px] text-slate-400 mb-3">请前往 QQ 开放平台 → 高阶能力 提审 2 个 markdown 模板（图文 + 纯文本）和 1
-                个按钮模板。如果不懂，请加入群聊 <a href="https://qm.qq.com/q/oB5hdOZcuQ" target="_blank">1085402468</a></p>
-              <div class="flex gap-3">
-                <div class="flex-1">
-                  <label class="text-xs text-slate-500">图文模板 ID <code
-                      style="font-size:10px;color:#94a3b8">![{{.px}}]({{.url}}){{.text}}</code></label>
-                  <input type="text" id="qb-imgTplId" class="ipt" placeholder="图片+文本 markdown 模板 ID">
-                </div>
-                <div class="flex-1">
-                  <label class="text-xs text-slate-500">纯文本模板 ID <code
-                      style="font-size:10px;color:#94a3b8">{{.text}}</code></label>
-                  <input type="text" id="qb-textTplId" class="ipt" placeholder="纯文本 markdown 模板 ID">
-                </div>
-                <div class="flex-1">
-                  <label class="text-xs text-slate-500">Keyboard 模板 ID（必填）</label>
-                  <input type="text" id="qb-kbTplId" class="ipt" placeholder="按钮模板 ID">
-                </div>
               </div>
             </div>
           </div>
@@ -1022,9 +978,6 @@
 
     function fltLog (lv, btn) { logFlt = lv; btn.parentElement.querySelectorAll('.lfb').forEach(b => b.classList.remove('active')); btn.classList.add('active'); rndLogs(); }
 
-    function cpText (text) { const ta = document.createElement('textarea'); ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-    function cpTpl (text) { try { cpText(text); toast('已复制: ' + text); } catch { toast('复制失败', 'error'); } }
-    function cpKbTpl () { try { cpText('{"rows": [{"buttons": [{"id": "1","render_data": {"label": "回调","visited_label": "回调","style": 0},"action": {"type": 1,"permission": {"type": 2},"data": "回调","unsupport_tips": "不支持该操作"}}]}]}'); toast('已复制按钮模板 JSON'); } catch { toast('复制失败', 'error'); } }
     function startLR () { if (logTmr) return; logTmr = setInterval(loadLogs, 3000); }
     function stopLR () { if (logTmr) { clearInterval(logTmr); logTmr = null; } }
 
@@ -1038,11 +991,7 @@
         $('qb-secret').value = cfg.secret || '';
         $('qb-qq').value = cfg.qqNumber || '';
         $('qb-master').value = cfg.masterQQ || '';
-        stg('qb-sandbox', cfg.sandbox);
         stg('qb-rehost', cfg.forceImageRehost);
-        $('qb-imgTplId').value = cfg.imgMarkdownTemplateId || '';
-        $('qb-textTplId').value = cfg.textMarkdownTemplateId || '';
-        $('qb-kbTplId').value = cfg.keyboardTemplateId || '';
         $('qb-selfid').textContent = d.selfId || '-';
         $('qb-nickname').textContent = d.nickname || '-';
         $('qb-qqnum').textContent = cfg.qqNumber || '-';
@@ -1077,12 +1026,8 @@
         secret: $('qb-secret').value.trim(),
         qqNumber: $('qb-qq').value.trim(),
         masterQQ: $('qb-master').value.trim(),
-        sandbox: gtg('qb-sandbox'),
         forceImageRehost: gtg('qb-rehost'),
         intents: ['GROUP_AT_MESSAGE_CREATE', 'C2C_MESSAGE_CREATE', 'INTERACTION'],
-        imgMarkdownTemplateId: $('qb-imgTplId').value.trim(),
-        textMarkdownTemplateId: $('qb-textTplId').value.trim(),
-        keyboardTemplateId: $('qb-kbTplId').value.trim(),
       };
       try { await af('/qqbot/config', 'POST', qcfg); } catch { }
       setTimeout(loadQQBotStatus, 2000);
