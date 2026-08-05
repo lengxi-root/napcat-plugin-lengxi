@@ -2,10 +2,9 @@
 import { state, ONEBOT_RULE_NAME, originalHandles, pendingMessages, groupButtonMap, PENDING_TIMEOUT } from '../core/state';
 import { addLog } from '../core/logger';
 import { getCallerPlugin, getSuffix, transformParams, applyReplaceText } from '../utils/transform';
-import { extractTextContent, extractImageInfo, extractMediaInfo } from '../utils/message';
-import { resolveImageForMarkdown, isForwardMessage, forwardNodesToHtml } from '../utils/image';
+import { extractTextContent, extractImageInfo, extractMediaInfo, isOfficialMessageSupported } from '../utils/message';
+import { resolveImageForMarkdown, isForwardMessage } from '../utils/image';
 import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/markdown';
-import { renderHtmlToBase64, uploadBase64Image } from './puppeteer';
 import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, cleanupPending, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
 import { isOfficialBotInGroup } from '../utils/group-check';
@@ -79,7 +78,8 @@ export function installHooks (): void {
   if (!sourceActions) return;
 
   let hookReentrant = false;
-  const HOOK_ACTIONS = ['send_msg', 'send_group_msg', 'send_private_msg', 'send_group_forward_msg'];
+  // 官机只接管已有对应发送能力的普通消息接口。未列出的接口默认保持原始发送。
+  const HOOK_ACTIONS = ['send_msg', 'send_group_msg', 'send_private_msg'];
 
   for (const actionName of HOOK_ACTIONS) {
     const handler = sourceActions.get(actionName);
@@ -101,7 +101,12 @@ export function installHooks (): void {
         const qcfg = state.config.qqbot;
         const callerRule = state.config.rules.find((r: any) => r.name === caller) || null;
 
-        if ((callerRule?.replace || state.config.globalReplace) && qcfg?.appid && qcfg.secret && qcfg.qqNumber && state.qqbotBridge?.isConnected()) {
+        const officialSendSupported =
+          !isForwardMessage(actionName, params) &&
+          isOfficialMessageSupported(params.message) &&
+          (actionName === 'send_group_msg' || (actionName === 'send_msg' && params?.message_type === 'group'));
+
+        if (officialSendSupported && (callerRule?.replace || state.config.globalReplace) && qcfg?.appid && qcfg.secret && qcfg.qqNumber && state.qqbotBridge?.isConnected()) {
           const groupId = params.group_id || (actionName === 'send_msg' && params.message_type === 'group' ? params.group_id : null);
           if (groupId && caller !== 'napcat-plugin-amsghook' && await isOfficialBotInGroup(String(groupId), adapter, netConfig)) {
             const gid = String(groupId);
@@ -110,83 +115,52 @@ export function installHooks (): void {
             let imageUrl: string | null = null;
             let imgWidth = 0, imgHeight = 0;
 
-            if (isForwardMessage(actionName, params)) {
-              addLog('info', `替代模式: 拦截合并转发 ← ${caller}, 群=${gid}`);
-              const nodes = params.messages || params.message;
-              if (Array.isArray(nodes) && nodes.length > 0) {
-                addLog('debug', `合并转发 node[0] keys: ${JSON.stringify(nodes[0])}`);
-                const html = forwardNodesToHtml(nodes);
-                const base64 = await renderHtmlToBase64(html);
-                if (base64) {
-                  // 从 PNG base64 解析实际宽高
-                  try {
-                    const buf = new Uint8Array(Buffer.from(base64, 'base64'));
-                    if (buf[0] === 0x89 && buf[1] === 0x50 && buf.length > 24) {
-                      imgWidth = (buf[16] << 24) | (buf[17] << 16) | (buf[18] << 8) | buf[19];
-                      imgHeight = (buf[20] << 24) | (buf[21] << 16) | (buf[22] << 8) | buf[23];
-                    }
-                  } catch { /* ignore */ }
-                  imageUrl = await uploadBase64Image(base64, gid);
-                  if (imageUrl) {
-                    addLog('info', `合并转发渲染成功: ${imageUrl} ${imgWidth}x${imgHeight}`);
+            // ===== 语音/视频媒体检测 =====
+            const mediaInfo = extractMediaInfo(params.message);
+            if (mediaInfo) {
+              const fileType = mediaInfo.type === 'record' ? 3 : 2;
+              const typeLabel = mediaInfo.type === 'record' ? '语音' : '视频';
+              addLog('info', `替代模式: 检测到${typeLabel} ← ${caller}, 群=${gid}`);
+
+              // 获取原始文件
+              const fileSource = mediaInfo.url || mediaInfo.file || '';
+              let fileBase64 = await resolveFileBase64(fileSource);
+
+              if (fileBase64) {
+                // 语音需要转换为标准 silk 格式（官方 API 要求）
+                if (mediaInfo.type === 'record') {
+                  const rawBuf = Buffer.from(fileBase64, 'base64');
+                  const silkBuf = await convertToSilk(rawBuf);
+                  if (silkBuf) {
+                    fileBase64 = silkBuf.toString('base64');
                   } else {
-                    addLog('info', '合并转发图片上传失败，回退原始发送');
+                    addLog('info', `替代模式: 语音 silk 转换失败，回退原始发送`);
                     return origHandle(params, adapter, netConfig, req);
                   }
-                } else {
-                  addLog('info', '合并转发渲染失败，回退原始发送');
-                  return origHandle(params, adapter, netConfig, req);
                 }
-                textContent = '';
+
+                const sent = await trySendMedia(gid, fileBase64, fileType, extractTextContent(params.message));
+                if (sent) {
+                  addLog('info', `替代模式: ${typeLabel}代发成功`);
+                  return { message_id: -1 };
+                }
+                addLog('info', `替代模式: ${typeLabel}官方代发失败（无可用 event_id），回退原始发送`);
+              } else {
+                addLog('info', `替代模式: ${typeLabel}文件解析失败，回退原始发送`);
               }
-            } else {
-              // ===== 语音/视频媒体检测 =====
-              const mediaInfo = extractMediaInfo(params.message);
-              if (mediaInfo) {
-                const fileType = mediaInfo.type === 'record' ? 3 : 2;
-                const typeLabel = mediaInfo.type === 'record' ? '语音' : '视频';
-                addLog('info', `替代模式: 检测到${typeLabel} ← ${caller}, 群=${gid}`);
+              return origHandle(params, adapter, netConfig, req);
+            }
 
-                // 获取原始文件
-                const fileSource = mediaInfo.url || mediaInfo.file || '';
-                let fileBase64 = await resolveFileBase64(fileSource);
-
-                if (fileBase64) {
-                  // 语音需要转换为标准 silk 格式（官方 API 要求）
-                  if (mediaInfo.type === 'record') {
-                    const rawBuf = Buffer.from(fileBase64, 'base64');
-                    const silkBuf = await convertToSilk(rawBuf);
-                    if (silkBuf) {
-                      fileBase64 = silkBuf.toString('base64');
-                    } else {
-                      addLog('info', `替代模式: 语音 silk 转换失败，回退原始发送`);
-                      return origHandle(params, adapter, netConfig, req);
-                    }
-                  }
-
-                  const sent = await trySendMedia(gid, fileBase64, fileType);
-                  if (sent) {
-                    addLog('info', `替代模式: ${typeLabel}代发成功`);
-                    return { message_id: -1 };
-                  }
-                  addLog('info', `替代模式: ${typeLabel}官方代发失败（无可用 event_id），回退原始发送`);
-                } else {
-                  addLog('info', `替代模式: ${typeLabel}文件解析失败，回退原始发送`);
-                }
-                return origHandle(params, adapter, netConfig, req);
-              }
-
-              textContent = extractTextContent(params.message);
-              const imgInfo = extractImageInfo(params.message);
-              if (imgInfo) {
-                const resolved = await resolveImageForMarkdown(imgInfo, gid);
-                if (resolved) {
-                  imageUrl = resolved.url;
-                  imgWidth = resolved.width;
-                  imgHeight = resolved.height;
-                } else {
-                  addLog('info', `图片 URL 解析失败: ${JSON.stringify(imgInfo)}`);
-                }
+            textContent = extractTextContent(params.message);
+            const imgInfo = extractImageInfo(params.message);
+            if (imgInfo) {
+              const resolved = await resolveImageForMarkdown(imgInfo, gid);
+              if (resolved) {
+                imageUrl = resolved.url;
+                imgWidth = resolved.width;
+                imgHeight = resolved.height;
+              } else {
+                addLog('info', `图片 URL 解析失败: ${JSON.stringify(imgInfo)}`);
               }
             }
 

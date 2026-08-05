@@ -21,6 +21,29 @@ export function extractTextContent (message: any): string {
   return '';
 }
 
+/**
+ * 官机代发的消息段白名单。
+ * 官方富媒体消息一次只能携带一个图片、语音或视频；其他消息段保持 NapCat 原始发送。
+ */
+export function isOfficialMessageSupported (message: any): boolean {
+  if (typeof message === 'string') return true;
+  if (!Array.isArray(message) || message.length === 0) return false;
+
+  let mediaCount = 0;
+  for (const seg of message) {
+    const type = seg?.type;
+    if (type === 'text' || type === 'at') continue;
+    if (type === 'image' || type === 'record' || type === 'video') {
+      if (!seg?.data || (typeof seg.data.url !== 'string' && typeof seg.data.file !== 'string')) return false;
+      mediaCount++;
+      if (mediaCount > 1) return false;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
 /** 提取消息中的第一张图片信息（含宽高） */
 export function extractImageInfo (message: any): ImageInfo | null {
   if (!Array.isArray(message)) return null;
