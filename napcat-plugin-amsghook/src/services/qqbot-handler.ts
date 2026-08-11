@@ -6,7 +6,7 @@ import {
   groupButtonMap, groupEventIdCache, eventIdWaiters, pendingContentAfterAwaken,
 } from '../core/state';
 import { addLog } from '../core/logger';
-import { sendContentViaOfficialBot, CALLBACK_KEYBOARD } from '../utils/markdown';
+import { sendContentViaOfficialBotDetailed, sendViolationNotice, CALLBACK_KEYBOARD } from '../utils/markdown';
 
 function onQQBotMessage (msg: QQBotMessage): void {
   if (!state.ctxRef) return;
@@ -38,7 +38,13 @@ function onQQBotMessage (msg: QQBotMessage): void {
         if (pendingContent && Date.now() - pendingContent.timestamp < PENDING_TIMEOUT) {
           pendingContentAfterAwaken.delete(qqGroupId);
           addLog('info', `唤醒流程完成，发送待发内容: 群=${qqGroupId}`);
-          sendContentViaOfficialBot(qqGroupId, groupOpenId, eventId, pendingContent.content, pendingContent.imageUrl).catch(() => { });
+          sendContentViaOfficialBotDetailed(
+            qqGroupId, groupOpenId, eventId, pendingContent.content, pendingContent.imageUrl,
+          ).then(async (result) => {
+            if (result.contentViolation) {
+              await sendViolationNotice(qqGroupId!, groupOpenId, eventId);
+            }
+          }).catch((e: any) => addLog('info', `唤醒后发送待发内容异常: ${e.message}`));
         }
       } else {
         addLog('info', `INTERACTION 回调: 未找到 group_openid=${groupOpenId} 对应的 QQ 群号`);

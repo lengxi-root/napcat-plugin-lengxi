@@ -23,6 +23,8 @@ export function registerApiRoutes (router: any): void {
     }
     if (body.globalReplace !== undefined) state.config.globalReplace = Boolean(body.globalReplace);
     if (body.globalOwnerOnly !== undefined) state.config.globalOwnerOnly = Boolean(body.globalOwnerOnly);
+    if (body.sendViolationNotice !== undefined) state.config.sendViolationNotice = Boolean(body.sendViolationNotice);
+    if (body.violationNoticeByOfficial !== undefined) state.config.violationNoticeByOfficial = Boolean(body.violationNoticeByOfficial);
     if (body.rules !== undefined && Array.isArray(body.rules)) {
       state.config.rules = (body.rules as any[]).map(r => ({
         name: String(r.name || ''), enabled: Boolean(r.enabled),
@@ -45,8 +47,13 @@ export function registerApiRoutes (router: any): void {
     res.json({ success: true, data: getInstalledPlugins() });
   });
 
-  router.getNoAuth('/logs', (_: any, res: any) => {
-    res.json({ success: true, data: logBuffer });
+  router.getNoAuth('/logs', (req: any, res: any) => {
+    const after = Math.max(0, Number(req.query?.after) || 0);
+    const firstId = logBuffer[0]?.id || 0;
+    const lastId = logBuffer[logBuffer.length - 1]?.id || 0;
+    const reset = after > lastId || (after > 0 && firstId > after + 1);
+    const data = reset ? logBuffer : logBuffer.filter(entry => entry.id > after);
+    res.json({ success: true, data, cursor: lastId, reset });
   });
 
   router.postNoAuth('/logs/clear', (_: any, res: any) => {

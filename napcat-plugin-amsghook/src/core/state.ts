@@ -19,6 +19,8 @@ export const DEFAULT_CONFIG: PluginConfig = {
   blockedUsers: [],
   globalReplace: false,
   globalOwnerOnly: false,
+  sendViolationNotice: true,
+  violationNoticeByOfficial: true,
 };
 
 export const state = {

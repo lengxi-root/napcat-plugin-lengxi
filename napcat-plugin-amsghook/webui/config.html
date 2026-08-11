@@ -629,6 +629,18 @@
               </div>
               <div class="tgl" id="d-globalOwnerOnly" onclick="tg(this)"></div>
             </div>
+            <div class="flex items-center justify-between py-3 border-t border-blue-100/30 dark:border-blue-900/10">
+              <div><span class="text-sm font-medium">发送违规提示</span>
+                <p class="text-[11px] text-slate-400">官机返回“消息内容违规”时，发送“消息违规”提示</p>
+              </div>
+              <div class="tgl" id="d-sendViolationNotice" onclick="tg(this);syncViolationControls()"></div>
+            </div>
+            <div id="violationChannelRow" class="flex items-center justify-between py-3 border-t border-blue-100/30 dark:border-blue-900/10">
+              <div><span class="text-sm font-medium">违规提示使用官机</span>
+                <p class="text-[11px] text-slate-400">开启由官方机器人发送，关闭由本体发送</p>
+              </div>
+              <div class="tgl" id="d-violationNoticeByOfficial" onclick="tg(this)"></div>
+            </div>
           </div>
           <div
             style="padding:10px 14px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:10px;display:flex;align-items:center;gap:8px">
@@ -829,7 +841,7 @@
 
   <script>
     const API = (p) => '../api' + p;
-    let allPlugins = [], C = {}, logD = [], logFlt = 'all', logTmr = null;
+    let allPlugins = [], C = {}, logD = [], logFlt = 'all', logTmr = null, logCursor = 0, logLoading = false;
     const $ = id => document.getElementById(id);
 
     // 自动检测暗色模式
@@ -841,6 +853,11 @@
     function tg (el) { el.classList.toggle('on'); }
     function gtg (id) { return $(id).classList.contains('on'); }
     function stg (id, v) { v ? $(id).classList.add('on') : $(id).classList.remove('on'); }
+    function syncViolationControls () {
+      const enabled = gtg('d-sendViolationNotice');
+      $('violationChannelRow').style.opacity = enabled ? '1' : '.4';
+      $('d-violationNoticeByOfficial').style.pointerEvents = enabled ? '' : 'none';
+    }
 
     function go (pg, el) {
       document.querySelectorAll('.pg').forEach(p => p.classList.remove('active'));
@@ -887,6 +904,9 @@
       $('d-blockedUsers').value = (C.blockedUsers || []).join(',');
       stg('d-globalReplace', !!C.globalReplace);
       stg('d-globalOwnerOnly', !!C.globalOwnerOnly);
+      stg('d-sendViolationNotice', C.sendViolationNotice !== false);
+      stg('d-violationNoticeByOfficial', C.violationNoticeByOfficial !== false);
+      syncViolationControls();
       const rules = C.rules || [];
       $('d-rules').textContent = rules.length;
       $('d-active').textContent = rules.filter(r => r.enabled).length;
@@ -959,20 +979,55 @@
       catch (e) { toast('刷新失败: ' + e, 'error'); }
     }
 
+    function logHtml (l) {
+      const t = new Date(l.time), ts = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}.${String(t.getMilliseconds()).padStart(3, '0')}`;
+      const lv = l.level.toUpperCase().padEnd(5);
+      return `<div class="log-e log-${l.level}"><span class="lt">${ts}</span> <span class="ll">[${lv}]</span> <span class="lm">${esc(l.msg)}</span></div>`;
+    }
+
+    function hasLogSelection () {
+      const selection = window.getSelection();
+      return !!selection && !selection.isCollapsed && $('logC').contains(selection.anchorNode);
+    }
+
+    function updateLogCount () {
+      const visible = logFlt === 'all' ? logD.length : logD.filter(l => l.level === logFlt).length;
+      $('logCnt').textContent = `${visible}/${logD.length} 条`;
+    }
+
     async function loadLogs () {
-      try { const r = await af('/logs'); logD = r.data || []; rndLogs(); }
-      catch { $('logC').innerHTML = '<p style="color:#f87171">获取失败</p>'; }
+      if (logLoading) return;
+      logLoading = true;
+      try {
+        const r = await af('/logs?after=' + logCursor);
+        const incoming = r.data || [];
+        if (r.reset) {
+          logD = incoming;
+          logCursor = Number(r.cursor) || 0;
+          rndLogs();
+          return;
+        }
+        logCursor = Number(r.cursor) || logCursor;
+        if (!incoming.length) { updateLogCount(); return; }
+        logD.push(...incoming);
+        const visible = logFlt === 'all' ? incoming : incoming.filter(l => l.level === logFlt);
+        const c = $('logC');
+        c.querySelector('[data-log-placeholder]')?.remove();
+        if (visible.length) c.insertAdjacentHTML('beforeend', visible.map(logHtml).join(''));
+        updateLogCount();
+        if ($('logAS')?.checked && !hasLogSelection()) c.scrollTop = c.scrollHeight;
+      } catch {
+        if (!logD.length) $('logC').innerHTML = '<p data-log-placeholder style="color:#f87171">获取失败</p>';
+      } finally {
+        logLoading = false;
+      }
     }
 
     function rndLogs () {
       const c = $('logC'), f = logFlt === 'all' ? logD : logD.filter(l => l.level === logFlt);
       $('logCnt').textContent = `${f.length}/${logD.length} 条`;
-      if (!f.length) { c.innerHTML = '<p style="color:#475569">暂无日志</p>'; return; }
-      c.innerHTML = f.map(l => {
-        const t = new Date(l.time), ts = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}:${String(t.getSeconds()).padStart(2, '0')}.${String(t.getMilliseconds()).padStart(3, '0')}`;
-        const lv = l.level.toUpperCase().padEnd(5);
-        return `<div class="log-e log-${l.level}"><span class="lt">${ts}</span> <span class="ll">[${lv}]</span> <span class="lm">${esc(l.msg)}</span></div>`;
-      }).join('');
+      if (!f.length) { c.innerHTML = '<p data-log-placeholder style="color:#475569">暂无日志</p>'; return; }
+      c.innerHTML = f.map(logHtml).join('');
       if ($('logAS')?.checked) c.scrollTop = c.scrollHeight;
     }
 
@@ -1018,6 +1073,8 @@
       C.blockedUsers = $('d-blockedUsers').value.trim();
       C.globalReplace = gtg('d-globalReplace');
       C.globalOwnerOnly = gtg('d-globalOwnerOnly');
+      C.sendViolationNotice = gtg('d-sendViolationNotice');
+      C.violationNoticeByOfficial = gtg('d-violationNoticeByOfficial');
       try { const r = await af('/config', 'POST', C); toast(r.success ? '配置已保存' : '保存失败', r.success ? 'success' : 'error'); }
       catch (e) { toast('保存失败: ' + e, 'error'); }
       // 同时保存 QQBot 配置

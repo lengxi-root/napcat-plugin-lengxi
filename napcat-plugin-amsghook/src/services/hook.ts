@@ -4,7 +4,10 @@ import { addLog } from '../core/logger';
 import { getCallerPlugin, getSuffix, transformParams, applyReplaceText } from '../utils/transform';
 import { extractTextContent, extractImageInfo, extractMediaInfo, isOfficialMessageSupported } from '../utils/message';
 import { resolveImageForMarkdown, isForwardMessage } from '../utils/image';
-import { sendContentViaOfficialBot, sendMediaViaOfficialBot } from '../utils/markdown';
+import {
+  sendContentViaOfficialBotDetailed, sendMediaViaOfficialBotDetailed,
+  sendViolationNotice, type OfficialSendResult,
+} from '../utils/markdown';
 import { getValidEventId, clickButtonAndWaitEventId, hasPendingWake, cleanupPending, generateVerifyCode } from '../utils/button';
 import { convertToSilk } from '../utils/audio';
 import { isOfficialBotInGroup } from '../utils/group-check';
@@ -54,23 +57,30 @@ async function resolveFileBase64 (fileOrUrl: string): Promise<string | null> {
 
 /**
  * 尝试通过三条路径发送媒体消息（语音/视频）
- * 返回 true 表示发送成功
+ * 返回发送结果以及实际使用的群 openid/event_id
  */
-async function trySendMedia (gid: string, fileBase64: string, fileType: number, content?: string): Promise<boolean> {
+interface OfficialAttemptResult extends OfficialSendResult {
+  groupOpenId?: string;
+  eventId?: string;
+}
+
+async function trySendMedia (gid: string, fileBase64: string, fileType: number, content?: string): Promise<OfficialAttemptResult> {
   const cached = getValidEventId(gid);
   if (cached) {
-    const sent = await sendMediaViaOfficialBot(gid, cached.groupOpenId, cached.eventId, fileBase64, fileType, content);
-    if (sent) return true;
+    const result = await sendMediaViaOfficialBotDetailed(gid, cached.groupOpenId, cached.eventId, fileBase64, fileType, content);
+    if (result.success || result.contentViolation) {
+      return { ...result, groupOpenId: cached.groupOpenId, eventId: cached.eventId };
+    }
   }
   const btnInfo = groupButtonMap.get(gid);
   if (btnInfo?.buttonId && btnInfo?.callbackData) {
     const newEventId = await clickButtonAndWaitEventId(gid, btnInfo.buttonId, btnInfo.callbackData);
     if (newEventId) {
-      const sent = await sendMediaViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, fileBase64, fileType, content);
-      if (sent) return true;
+      const result = await sendMediaViaOfficialBotDetailed(gid, btnInfo.groupOpenId, newEventId, fileBase64, fileType, content);
+      return { ...result, groupOpenId: btnInfo.groupOpenId, eventId: newEventId };
     }
   }
-  return false;
+  return { success: false, contentViolation: false };
 }
 
 export function installHooks (): void {
@@ -139,9 +149,13 @@ export function installHooks (): void {
                   }
                 }
 
-                const sent = await trySendMedia(gid, fileBase64, fileType, extractTextContent(params.message));
-                if (sent) {
+                const result = await trySendMedia(gid, fileBase64, fileType, extractTextContent(params.message));
+                if (result.success) {
                   addLog('info', `替代模式: ${typeLabel}代发成功`);
+                  return { message_id: -1 };
+                }
+                if (result.contentViolation && result.groupOpenId && result.eventId) {
+                  await sendViolationNotice(gid, result.groupOpenId, result.eventId, adapter, netConfig);
                   return { message_id: -1 };
                 }
                 addLog('info', `替代模式: ${typeLabel}官方代发失败（无可用 event_id），回退原始发送`);
@@ -184,8 +198,12 @@ export function installHooks (): void {
               const cached = getValidEventId(gid);
               if (cached) {
                 addLog('info', `替代模式: 使用缓存 event_id=${cached.eventId}, 群=${gid}`);
-                const sent = await sendContentViaOfficialBot(gid, cached.groupOpenId, cached.eventId, textContent, imageUrl);
-                if (sent) return { message_id: -1 };
+                const result = await sendContentViaOfficialBotDetailed(gid, cached.groupOpenId, cached.eventId, textContent, imageUrl);
+                if (result.success) return { message_id: -1 };
+                if (result.contentViolation) {
+                  await sendViolationNotice(gid, cached.groupOpenId, cached.eventId, adapter, netConfig);
+                  return { message_id: -1 };
+                }
                 addLog('info', `替代模式: event_id 可能已过期，尝试重新点击按钮`);
               }
 
@@ -194,8 +212,12 @@ export function installHooks (): void {
                 addLog('info', `替代模式: 点击按钮获取新 event_id, 群=${gid}`);
                 const newEventId = await clickButtonAndWaitEventId(gid, btnInfo.buttonId, btnInfo.callbackData);
                 if (newEventId) {
-                  const sent = await sendContentViaOfficialBot(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl);
-                  if (sent) return { message_id: -1 };
+                  const result = await sendContentViaOfficialBotDetailed(gid, btnInfo.groupOpenId, newEventId, textContent, imageUrl);
+                  if (result.success) return { message_id: -1 };
+                  if (result.contentViolation) {
+                    await sendViolationNotice(gid, btnInfo.groupOpenId, newEventId, adapter, netConfig);
+                    return { message_id: -1 };
+                  }
                 }
                 // 已有按钮 id 的群无需唤醒流程，点击失败直接回退原始发送
                 addLog('info', `替代模式: 点击按钮未获得有效 event_id，群 ${gid} 已有按钮映射，跳过唤醒回退原始发送`);

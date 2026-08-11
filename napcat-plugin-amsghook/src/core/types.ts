@@ -39,9 +39,14 @@ export interface PluginConfig {
   globalReplace?: boolean;
   /** 全局仅主人开关 */
   globalOwnerOnly?: boolean;
+  /** 官机返回消息内容违规时是否发送提示 */
+  sendViolationNotice?: boolean;
+  /** 违规提示是否由官方机器人发送；关闭时由本体发送 */
+  violationNoticeByOfficial?: boolean;
 }
 
 export interface LogEntry {
+  id: number;
   time: number;
   level: string;
   msg: string;
